@@ -6,9 +6,9 @@ import (
     "log"
     "time"
 
-    "caaspay-core/api/config"
-    "caaspay-core/internal/metrics"
-    "caaspay-core/internal/tracing"
+    "github.com/caaspay/caaspay-core/internal/config"
+    "github.com/caaspay/caaspay-core/internal/metrics"
+    "github.com/caaspay/caaspay-core/internal/tracing"
 )
 
 // ComplianceReporter now includes configuration flags and additional context.

@@ -1,0 +1,19 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+  shutdown_timeout: 5
+
+logging:
+  level: "info"
+  format: "json"
+
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics"
+
+tracing:
+  enabled: false
+  service_name: "caaspay-core"
+  exporter: "jaeger"
+  endpoint: "localhost:6831" 

@@ -1,0 +1,44 @@
+# Service-specific configuration
+service:
+  name: "example-service"
+  version: "1.0.0"
+  
+  # Service-specific endpoints
+  endpoints:
+    - name: "health"
+      path: "/health"
+      method: "GET"
+    
+    - name: "process"
+      path: "/process"
+      method: "POST"
+      timeout_ms: 5000
+  
+  # Service-specific settings
+  settings:
+    max_retries: 3
+    batch_size: 100
+    cache_ttl: 3600
+    
+  # Service-specific features
+  features:
+    enable_caching: true
+    enable_validation: true
+    enable_rate_limiting: true
+    
+  # Service-specific metrics
+  metrics:
+    custom_counters:
+      - name: "processed_items"
+        description: "Number of items processed"
+      - name: "failed_items"
+        description: "Number of items that failed processing"
+    
+    custom_gauges:
+      - name: "queue_size"
+        description: "Current size of the processing queue"
+    
+    custom_histograms:
+      - name: "processing_time"
+        description: "Time taken to process items"
+        buckets: [0.1, 0.5, 1.0, 2.0, 5.0] 

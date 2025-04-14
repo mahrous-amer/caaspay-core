@@ -3,73 +3,243 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
 	"reflect"
-	"strconv"
 	"sync"
 	"time"
 
-	"caaspay-core/internal/logging"
-	"caaspay-core/internal/metrics"
-	"caaspay-core/internal/transport"
-	"caaspay-core/internal/config"
-	"caaspay-core/internal/compliance"
+	"github.com/caaspay/caaspay-core/internal/logging"
+	"github.com/caaspay/caaspay-core/internal/metrics"
+	"github.com/caaspay/caaspay-core/internal/transport"
+	"github.com/caaspay/caaspay-core/internal/config"
+	"github.com/caaspay/caaspay-core/internal/compliance"
 )
 
-// Service manages the lifecycle and behavior of a microservice.
-type Service struct {
-	Name               string
-	Logger             *logging.Logger
-	Metrics            *metrics.Metrics
-	Transport          transport.Transport
-	API                transport.API
-	ChannelMgr         *ChannelManager
-	ComplianceReporter *compliance.ComplianceReporter
-	Config             *config.Config
-	shutdownCh         chan struct{}
-	wg                 sync.WaitGroup
+// Service defines the interface for our core service
+type Service interface {
+	// Start initializes the service
+	Start(ctx context.Context) error
+	// Stop gracefully shuts down the service
+	Stop(ctx context.Context) error
+	// HealthCheck returns the health status of the service
+	HealthCheck(ctx context.Context) error
 }
 
-// NewService initializes a service with logging, metrics, compliance tracking, and transport.
-func NewService(configPath string, serviceConfigPath string) *Service {
-	fmt.Println("🚀 Initializing Service Framework")
+// NewService creates a new instance of the service
+func NewService() Service {
+	return &serviceImpl{}
+}
 
-	cfg, err := config.LoadConfig(configPath, serviceConfigPath)
+type serviceImpl struct {
+	// Add service-specific fields here
+}
+
+func (s *serviceImpl) Start(ctx context.Context) error {
+	// TODO: Implement service startup logic
+	return nil
+}
+
+func (s *serviceImpl) Stop(ctx context.Context) error {
+	// TODO: Implement service shutdown logic
+	return nil
+}
+
+func (s *serviceImpl) HealthCheck(ctx context.Context) error {
+	// TODO: Implement health check logic
+	return nil
+}
+
+// ServiceStruct represents the core service structure.
+type ServiceStruct struct {
+	cfg             *config.Config
+	logger          *logging.Logger
+	metrics         *metrics.Metrics
+	compliance      *compliance.ComplianceReporter
+	transport       transport.Transport
+	serviceInstance interface{}
+	shutdownCh      chan struct{}
+	wg              sync.WaitGroup
+}
+
+// NewServiceStruct creates a new service instance.
+func NewServiceStruct(cfg *config.Config, serviceInstance interface{}) (*ServiceStruct, error) {
+	// Initialize logger
+	logger := logging.NewLogger(cfg.Framework.ServiceName, cfg.Framework.Logging.Level, cfg.Framework.Logging.RedactSensitive)
+
+	// Initialize metrics
+	metricsInstance, err := metrics.NewMetrics(cfg.Framework.ServiceName, &cfg.Framework.Observability)
 	if err != nil {
-		log.Fatalf("❌ Failed to load configuration: %v", err)
+		return nil, fmt.Errorf("failed to initialize metrics: %w", err)
 	}
 
-	logger := logging.NewLogger(cfg.Framework.ServiceName)
-
-	transportCfg := transport.RedisTransportConfig{
+	// Initialize transport
+	redisCfg := transport.RedisTransportConfig{
 		RedisAddr:          cfg.Framework.Transport.RedisAddress,
 		UseCompression:     cfg.Framework.Transport.UseCompression,
 		UseEncryption:      cfg.Framework.Transport.UseEncryption,
 		ServiceReplyStream: fmt.Sprintf("%s_reply", cfg.Framework.ServiceName),
+		MaxRetries:         3,
+		RetryDelay:         500 * time.Millisecond,
 	}
-	redisTransport := transport.NewRedisTransport(transportCfg)
+	redisTransport := transport.NewRedisTransport(redisCfg, logger)
 
-	metricsInstance, err := metrics.NewMetrics(cfg.Framework.ServiceName, fmt.Sprintf("%s:%d", cfg.Framework.Observability.MetricsHost, cfg.Framework.Observability.MetricsPort))
-	if err != nil {
-		log.Fatalf("❌ Failed to initialize metrics: %v", err)
+	// Initialize compliance reporter
+	complianceReporter := compliance.NewComplianceReporter(cfg, metricsInstance)
+
+	service := &ServiceStruct{
+		cfg:             cfg,
+		logger:          logger,
+		metrics:         metricsInstance,
+		compliance:      complianceReporter,
+		transport:       redisTransport,
+		serviceInstance: serviceInstance,
+		shutdownCh:      make(chan struct{}),
 	}
 
-	complianceReporter := compliance.NewComplianceReporter(metricsInstance, logger, cfg)
-
-	return &Service{
-		Name:               cfg.Framework.ServiceName,
-		Logger:             logger,
-		Metrics:            metricsInstance,
-		Transport:          redisTransport,
-		API:                redisTransport,
-		ChannelMgr:         NewChannelManager(),
-		ComplianceReporter: complianceReporter,
-		shutdownCh:         make(chan struct{}),
+	// Register RPC methods
+	if err := service.registerRPCMethods(); err != nil {
+		return nil, fmt.Errorf("failed to register RPC methods: %w", err)
 	}
+
+	return service, nil
+}
+
+// registerRPCMethods registers all RPC methods from the service instance.
+func (s *ServiceStruct) registerRPCMethods() error {
+	serviceType := reflect.TypeOf(s.serviceInstance)
+	for i := 0; i < serviceType.NumMethod(); i++ {
+		method := serviceType.Method(i)
+		if !method.IsExported() {
+			continue
+		}
+
+		// Get method type (excluding the receiver)
+		methodType := method.Type
+		if methodType.NumIn() < 3 || methodType.NumOut() < 1 {
+			continue
+		}
+
+		// Check if method has RPC signature (context.Context, []byte)
+		if methodType.In(1).String() == "context.Context" && methodType.In(2).String() == "[]byte" {
+			stream := method.Name
+			if err := s.registerRPCMethod(stream, map[string]string{"stream": stream}); err != nil {
+				return fmt.Errorf("failed to register RPC method %s: %w", method.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// registerRPCMethod registers a single RPC method.
+func (s *ServiceStruct) registerRPCMethod(methodName string, config map[string]string) error {
+	// Get the method from the service instance
+	method := reflect.ValueOf(s.serviceInstance).MethodByName(methodName)
+	if !method.IsValid() {
+		return fmt.Errorf("method %s not found", methodName)
+	}
+
+	// Register the method with the transport
+	stream := config["stream"]
+	if stream == "" {
+		return fmt.Errorf("stream not specified for method %s", methodName)
+	}
+
+	if err := s.transport.Subscribe(stream, func(ctx context.Context, data []byte) ([]byte, error) {
+		// Call the method with the context and data
+		args := []reflect.Value{
+			reflect.ValueOf(ctx),
+			reflect.ValueOf(data),
+		}
+		results := method.Call(args)
+
+		// Check for errors
+		if len(results) > 0 && !results[len(results)-1].IsNil() {
+			return nil, results[len(results)-1].Interface().(error)
+		}
+
+		// Return the result
+		if len(results) > 0 {
+			return results[0].Interface().([]byte), nil
+		}
+		return nil, nil
+	}); err != nil {
+		return fmt.Errorf("failed to subscribe to stream %s: %w", stream, err)
+	}
+
+	return nil
+}
+
+// registerEmitterPull registers a method to be called periodically.
+func (s *ServiceStruct) registerEmitterPull(stream string, interval time.Duration, method reflect.Value) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-s.shutdownCh:
+				return
+			case <-ticker.C:
+				ctx := context.Background()
+				args := []reflect.Value{reflect.ValueOf(ctx)}
+				results := method.Call(args)
+
+				if len(results) > 0 && !results[len(results)-1].IsNil() {
+					s.logger.Error(ctx, "Emitter pull error", map[string]interface{}{
+						"stream": stream,
+						"error":  results[len(results)-1].Interface().(error).Error(),
+					})
+					continue
+				}
+
+				if len(results) > 0 {
+					if data, ok := results[0].Interface().([]byte); ok {
+						if err := s.transport.Publish(ctx, stream, data); err != nil {
+							s.logger.Error(ctx, "Failed to publish message", map[string]interface{}{
+								"stream": stream,
+								"error":  err.Error(),
+							})
+						}
+					}
+				}
+			}
+		}
+	}()
+}
+
+// registerReceiver registers a method to handle incoming messages.
+func (s *ServiceStruct) registerReceiver(stream string, batchSize int, method reflect.Value) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		batch := make([][]byte, 0, batchSize)
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		if err := s.transport.Subscribe(stream, func(ctx context.Context, data []byte) ([]byte, error) {
+			batch = append(batch, data)
+			if len(batch) >= batchSize {
+				args := []reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(batch)}
+				results := method.Call(args)
+				batch = batch[:0]
+
+				if len(results) > 0 && !results[len(results)-1].IsNil() {
+					return nil, results[len(results)-1].Interface().(error)
+				}
+			}
+			return nil, nil
+		}); err != nil {
+			s.logger.Error(context.Background(), "Failed to subscribe to stream", map[string]interface{}{
+				"stream": stream,
+				"error":  err.Error(),
+			})
+		}
+	}()
 }
 
 // AutoRegisterFunctions scans the struct for eligible framework methods and registers them.
-func (s *Service) AutoRegisterFunctions(serviceInstance interface{}) {
+func (s *ServiceStruct) AutoRegisterFunctions(serviceInstance interface{}) {
 	svcType := reflect.TypeOf(serviceInstance)
 	svcValue := reflect.ValueOf(serviceInstance)
 
@@ -81,93 +251,88 @@ func (s *Service) AutoRegisterFunctions(serviceInstance interface{}) {
 		batchSize := 1
 		interval := 10 * time.Second
 
-		if tag, ok := method.Tag.Lookup("rpc"); ok {
-			if tag != "" {
-				streamName = tag
-			}
-			if timeoutTag, ok := method.Tag.Lookup("timeout"); ok {
-				t, err := strconv.Atoi(timeoutTag)
-				if err == nil {
-					timeout = time.Duration(t) * time.Second
-				}
-			}
-			s.registerRPCMethod(streamName, timeout, methodValue)
-		} else if tag, ok := method.Tag.Lookup("emitter_pull"); ok {
-			if tag != "" {
-				streamName = tag
-			}
-			if intervalTag, ok := method.Tag.Lookup("interval"); ok {
-				t, err := strconv.Atoi(intervalTag)
-				if err == nil {
-					interval = time.Duration(t) * time.Second
-				}
-			}
+		// Check method signature for RPC
+		if method.Type.NumIn() == 3 && method.Type.In(1).String() == "context.Context" && method.Type.In(2).String() == "[]byte" {
+			s.registerRPCMethod(streamName, map[string]string{"stream": streamName, "timeout": fmt.Sprintf("%d", int(timeout))})
+		}
+
+		// Check method signature for emitter pull
+		if method.Type.NumIn() == 2 && method.Type.In(1).String() == "context.Context" {
 			s.registerEmitterPull(streamName, interval, methodValue)
-		} else if tag, ok := method.Tag.Lookup("receiver"); ok {
-			if tag != "" {
-				streamName = tag
-			}
-			if batchTag, ok := method.Tag.Lookup("batch_size"); ok {
-				b, err := strconv.Atoi(batchTag)
-				if err == nil {
-					batchSize = b
-				}
-			}
+		}
+
+		// Check method signature for receiver
+		if method.Type.NumIn() == 3 && method.Type.In(1).String() == "context.Context" && method.Type.In(2).String() == "[][]byte" {
 			s.registerReceiver(streamName, batchSize, methodValue)
 		}
 	}
 }
 
 // Run starts the service lifecycle
-func (s *Service) Run(serviceInstance interface{}) {
-	s.Logger.Info("Starting service", "name", s.Name)
+func (s *ServiceStruct) Run(serviceInstance interface{}) {
+	ctx := context.Background()
+	s.logger.Info(ctx, "Starting service", map[string]interface{}{
+		"name": s.cfg.Framework.ServiceName,
+	})
 	s.AutoRegisterFunctions(serviceInstance)
 	<-s.shutdownCh
-	s.Logger.Info("Shutting down service", "name", s.Name)
+	s.logger.Info(ctx, "Shutting down service", map[string]interface{}{
+		"name": s.cfg.Framework.ServiceName,
+	})
 	s.wg.Wait()
 }
 
 // Shutdown gracefully stops the service
-func (s *Service) Shutdown() {
-	s.Logger.Info("Shutting down service", "name", s.Name)
+func (s *ServiceStruct) Shutdown() {
+	ctx := context.Background()
+	s.logger.Info(ctx, "Shutting down service", map[string]interface{}{
+		"name": s.cfg.Framework.ServiceName,
+	})
 	close(s.shutdownCh)
 }
 
 // Request performs an RPC call using the transport layer.
-func (s *Service) Request(ctx context.Context, stream string, data []byte, timeout time.Duration) ([]byte, error) {
-	s.Metrics.Increment("rpc_request")
-	return s.Transport.Request(ctx, stream, data, timeout)
+func (s *ServiceStruct) Request(ctx context.Context, stream string, data []byte, timeout time.Duration) ([]byte, error) {
+	s.metrics.Increment(ctx, "rpc_request")
+	return s.transport.Request(ctx, stream, data, timeout)
 }
 
 // Publish sends a message to a stream.
-func (s *Service) Publish(ctx context.Context, stream string, data []byte) error {
-	s.Metrics.Increment("event_published")
-	return s.Transport.Publish(ctx, stream, data)
+func (s *ServiceStruct) Publish(ctx context.Context, stream string, data []byte) error {
+	s.metrics.Increment(ctx, "event_published")
+	return s.transport.Publish(ctx, stream, data)
 }
 
 // Subscribe registers a handler to process incoming messages.
-func (s *Service) Subscribe(stream string, handler transport.HandlerFunc) error {
-	s.Metrics.Increment("subscriber_registered")
-	return s.Transport.Subscribe(stream, handler)
+func (s *ServiceStruct) Subscribe(stream string, handler transport.HandlerFunc) error {
+	s.metrics.Increment(context.Background(), "subscriber_registered")
+	return s.transport.Subscribe(stream, handler)
 }
 
 // EmitterPolling sends messages via a managed channel.
-func (s *Service) EmitterPolling(stream string) chan []byte {
-	ch := s.ChannelMgr.CreateChannel(stream, 100)
+func (s *ServiceStruct) EmitterPolling(stream string) chan []byte {
+	ch := make(chan []byte, 100)
 
 	go func() {
 		for {
 			msg, ok := <-ch
 			if !ok {
-				s.Logger.Info("🛑 Channel closed, stopping emitter polling", "stream", stream)
+				s.logger.Info(context.Background(), "Channel closed, stopping emitter polling", map[string]interface{}{
+					"stream": stream,
+				})
 				break
 			}
-			s.Metrics.Increment("emitter_polling")
-			s.ComplianceReporter.TrackEvent("emitter_polling")
-			if err := s.API.Publish(stream, msg); err != nil {
-				s.Logger.Error("❌ Failed to publish message", "stream", stream, "error", err)
+			s.metrics.Increment(context.Background(), "emitter_polling")
+			s.compliance.TrackEvent(context.Background(), "emitter_polling")
+			if err := s.transport.Publish(context.Background(), stream, msg); err != nil {
+				s.logger.Error(context.Background(), "Failed to publish message", map[string]interface{}{
+					"stream": stream,
+					"error":  err.Error(),
+				})
 			} else {
-				s.Logger.Info("✅ Message emitted", "stream", stream)
+				s.logger.Info(context.Background(), "Message emitted", map[string]interface{}{
+					"stream": stream,
+				})
 			}
 		}
 	}()
@@ -176,19 +341,25 @@ func (s *Service) EmitterPolling(stream string) chan []byte {
 }
 
 // EmitterPulling continuously executes a function and emits its output.
-func (s *Service) EmitterPulling(stream string, fetch func() ([]byte, error), interval time.Duration) {
+func (s *ServiceStruct) EmitterPulling(stream string, fetch func() ([]byte, error), interval time.Duration) {
 	go func() {
 		for {
 			start := time.Now()
 			msg, err := fetch()
 			if err != nil {
-				s.Logger.Error("❌ EmitterPulling error", "stream", stream, "error", err)
+				s.logger.Error(context.Background(), "EmitterPulling error", map[string]interface{}{
+					"stream": stream,
+					"error":  err.Error(),
+				})
 			} else {
-				s.Metrics.Increment("emitter_pulling")
-				s.Metrics.ObserveDuration("emitter_pulling_time", start)
-				s.ComplianceReporter.TrackEvent("emitter_pulling")
-				if err := s.API.Publish(stream, msg); err != nil {
-					s.Logger.Error("❌ Failed to publish pulled message", "stream", stream, "error", err)
+				s.metrics.Increment(context.Background(), "emitter_pulling")
+				s.metrics.RecordTiming(context.Background(), "emitter_pulling_time", time.Since(start))
+				s.compliance.TrackEvent(context.Background(), "emitter_pulling")
+				if err := s.transport.Publish(context.Background(), stream, msg); err != nil {
+					s.logger.Error(context.Background(), "Failed to publish pulled message", map[string]interface{}{
+						"stream": stream,
+						"error":  err.Error(),
+					})
 				}
 			}
 			time.Sleep(interval)
@@ -197,14 +368,18 @@ func (s *Service) EmitterPulling(stream string, fetch func() ([]byte, error), in
 }
 
 // Receiver subscribes to a transport stream and processes incoming messages.
-func (s *Service) Receiver(stream string, handler func(ctx context.Context, data []byte)) {
+func (s *ServiceStruct) Receiver(stream string, handler func(ctx context.Context, data []byte)) {
 	go func() {
-		if err := s.API.Subscribe(stream, func(ctx context.Context, msg []byte) {
-			s.Metrics.Increment("receiver_messages")
-			s.ComplianceReporter.TrackEvent("receiver_messages")
+		if err := s.transport.Subscribe(stream, func(ctx context.Context, msg []byte) ([]byte, error) {
+			s.metrics.Increment(ctx, "receiver_messages")
+			s.compliance.TrackEvent(ctx, "receiver_messages")
 			handler(ctx, msg)
+			return nil, nil
 		}); err != nil {
-			s.Logger.Error("❌ Failed to subscribe to stream", "stream", stream, "error", err)
+			s.logger.Error(context.Background(), "Failed to subscribe to stream", map[string]interface{}{
+				"stream": stream,
+				"error":  err.Error(),
+			})
 		}
 	}()
 }

@@ -6,27 +6,28 @@ import (
 	"log"
 	"time"
 
-	"caaspay-api-go/api/config"
+	"github.com/caaspay/caaspay-core/internal/config"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/jaeger"
-	"go.opentelemetry.io/otel/exporters/trace/ddtrace"
 	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/sdk/trace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/semconv/v1.4.0"
+	"go.opentelemetry.io/otel/trace"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 // Tracer global variable
 var Tracer trace.Tracer
 
 // InitTracing initializes tracing using provided observability config.
-func InitTracing(serviceName string, cfg config.ObservabilityConfig) func() {
+func InitTracing(serviceName string, cfg *config.ObservabilityConfig) func() {
 	if !cfg.TracingEnabled {
 		log.Println("⚠️ Tracing is disabled in configuration.")
 		return func() {} // No-op shutdown
 	}
 
-	var tp *trace.TracerProvider
+	var tp *sdktrace.TracerProvider
 	var err error
 
 	switch cfg.MetricsAdapter {
@@ -58,7 +59,7 @@ func InitTracing(serviceName string, cfg config.ObservabilityConfig) func() {
 }
 
 // setupJaeger initializes a Jaeger exporter based on config values.
-func setupJaeger(serviceName string, cfg config.ObservabilityConfig) (*trace.TracerProvider, error) {
+func setupJaeger(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace.TracerProvider, error) {
 	jaegerEndpoint := fmt.Sprintf("http://%s:%d/api/traces", cfg.OpentracingHost, cfg.OpentracingPort)
 
 	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(jaegerEndpoint)))
@@ -66,9 +67,9 @@ func setupJaeger(serviceName string, cfg config.ObservabilityConfig) (*trace.Tra
 		return nil, err
 	}
 
-	tp := trace.NewTracerProvider(
-		trace.WithBatcher(exp),
-		trace.WithResource(resource.NewWithAttributes(
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
 			semconv.ServiceNameKey.String(serviceName),
 		)),
@@ -79,17 +80,16 @@ func setupJaeger(serviceName string, cfg config.ObservabilityConfig) (*trace.Tra
 }
 
 // setupDatadog initializes a Datadog exporter using observability config.
-func setupDatadog(serviceName string, cfg config.ObservabilityConfig) (*trace.TracerProvider, error) {
-	datadogAddr := fmt.Sprintf("http://%s:%d/v0.4/traces", cfg.MetricsHost, cfg.MetricsPort)
-
-	exp, err := ddtrace.NewExporter(ddtrace.WithAgentAddr(datadogAddr))
-	if err != nil {
-		return nil, err
-	}
-
-	tp := trace.NewTracerProvider(
-		trace.WithBatcher(exp),
-		trace.WithResource(resource.NewWithAttributes(
+func setupDatadog(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace.TracerProvider, error) {
+	// Initialize DataDog tracer
+	tracer.Start(
+		tracer.WithService(serviceName),
+		tracer.WithEnv("production"),
+	)
+	
+	// Create a no-op tracer provider for DataDog since it uses its own tracer
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
 			semconv.ServiceNameKey.String(serviceName),
 		)),
@@ -99,7 +99,7 @@ func setupDatadog(serviceName string, cfg config.ObservabilityConfig) (*trace.Tr
 	return tp, nil
 }
 
-// StartSpan starts a new tracing span.
+// StartSpan creates a new span from the context.
 func StartSpan(ctx context.Context, name string) (context.Context, trace.Span) {
 	return Tracer.Start(ctx, name)
 }

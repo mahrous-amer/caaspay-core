@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"caaspay-api-go/internal/logging"
+	"github.com/caaspay/caaspay-core/internal/logging"
 )
 
 // RedisTransport implements the Transport interface using Redis Streams.
@@ -82,7 +82,7 @@ func (r *RedisTransport) Request(ctx context.Context, stream string, data []byte
 
 	encodedData, err := r.prepareData(data)
 	if err != nil {
-		r.logger.Log("error", "prepareData error in Request", map[string]interface{}{"error": err.Error()})
+		r.logger.Error(ctx, "prepareData error in Request", map[string]interface{}{"error": err.Error()})
 		return nil, err
 	}
 
@@ -97,9 +97,14 @@ func (r *RedisTransport) Request(ctx context.Context, stream string, data []byte
 	}
 
 	if err := Retry(r.maxRetries, r.retryDelay, addOp); err != nil {
-		r.logger.Log("error", "Failed to send request after retries", map[string]interface{}{"error": err.Error()})
+		r.logger.Error(ctx, "Failed to send request after retries", map[string]interface{}{"error": err.Error()})
 		return nil, fmt.Errorf("failed to send request after retries: %w", err)
 	}
+
+	r.logger.Info(ctx, "Sending RPC request", map[string]interface{}{
+		"stream": stream,
+		"size":   len(data),
+	})
 
 	select {
 	case response := <-responseCh:
@@ -114,7 +119,7 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 	for {
 		select {
 		case <-ctx.Done():
-			r.logger.Log("info", "listenForReply: context canceled", nil)
+			r.logger.Info(ctx, "listenForReply: context canceled", nil)
 			return
 		default:
 			res, err := r.client.XRead(ctx, &redis.XReadArgs{
@@ -126,19 +131,19 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 				if ctx.Err() != nil {
 					return
 				}
-				r.logger.Log("error", "Error reading reply", map[string]interface{}{"error": err.Error()})
+				r.logger.Error(ctx, "Error reading reply", map[string]interface{}{"error": err.Error()})
 				continue
 			}
 			if len(res) > 0 && len(res[0].Messages) > 0 {
 				msg := res[0].Messages[0]
 				body, ok := msg.Values["body"].(string)
 				if !ok {
-					r.logger.Log("error", "listenForReply: invalid message format", nil)
+					r.logger.Error(ctx, "listenForReply: invalid message format", nil)
 					continue
 				}
 				processed, err := r.processData([]byte(body))
 				if err != nil {
-					r.logger.Log("error", "processData error in listenForReply", map[string]interface{}{"error": err.Error()})
+					r.logger.Error(ctx, "processData error in listenForReply", map[string]interface{}{"error": err.Error()})
 				}
 				responseCh <- processed
 				return
@@ -151,7 +156,7 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 func (r *RedisTransport) Publish(ctx context.Context, stream string, data []byte) error {
 	encodedData, err := r.prepareData(data)
 	if err != nil {
-		r.logger.Log("error", "prepareData error in Publish", map[string]interface{}{"error": err.Error()})
+		r.logger.Error(ctx, "prepareData error in Publish", map[string]interface{}{"error": err.Error()})
 		return err
 	}
 	addOp := func() error {
@@ -162,12 +167,18 @@ func (r *RedisTransport) Publish(ctx context.Context, stream string, data []byte
 		return err
 	}
 	if err := Retry(r.maxRetries, r.retryDelay, addOp); err != nil {
-		r.logger.Log("error", "Failed to publish message after retries", map[string]interface{}{"error": err.Error()})
+		r.logger.Error(ctx, "Failed to publish message after retries", map[string]interface{}{"error": err.Error()})
 		if dlqErr := PublishToDLQ(ctx, r.client, r.dlqStream, stream, encodedData); dlqErr != nil {
-			r.logger.Log("error", "Failed to publish to DLQ", map[string]interface{}{"error": dlqErr.Error()})
+			r.logger.Error(ctx, "Failed to publish to DLQ", map[string]interface{}{"error": dlqErr.Error()})
 		}
 		return fmt.Errorf("failed to publish message after retries: %w", err)
 	}
+
+	r.logger.Info(ctx, "Publishing message", map[string]interface{}{
+		"stream": stream,
+		"size":   len(data),
+	})
+
 	return nil
 }
 
@@ -180,9 +191,13 @@ func (r *RedisTransport) Subscribe(stream string, handler HandlerFunc) error {
 	// Create consumer group if it does not exist.
 	if err := r.client.XGroupCreateMkStream(ctx, stream, group, "$").Err(); err != nil {
 		if err.Error() != "BUSYGROUP Consumer Group name already exists" {
-			r.logger.Log("error", "Error creating consumer group", map[string]interface{}{"error": err.Error()})
+			r.logger.Error(ctx, "Error creating consumer group", map[string]interface{}{"error": err.Error()})
 		}
 	}
+
+	r.logger.Info(context.Background(), "Subscribing to stream", map[string]interface{}{
+		"stream": stream,
+	})
 
 	for {
 		res, err := r.client.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -193,20 +208,20 @@ func (r *RedisTransport) Subscribe(stream string, handler HandlerFunc) error {
 			Block:    0,
 		}).Result()
 		if err != nil {
-			r.logger.Log("error", "Error reading from stream", map[string]interface{}{"error": err.Error()})
+			r.logger.Error(ctx, "Error reading from stream", map[string]interface{}{"error": err.Error()})
 			continue
 		}
 		for _, s := range res {
 			for _, msg := range s.Messages {
 				body, ok := msg.Values["body"].(string)
 				if !ok {
-					r.logger.Log("error", "Subscribe: invalid message body format", nil)
+					r.logger.Error(ctx, "Subscribe: invalid message body format", nil)
 					r.client.XAck(ctx, s.Stream, group, msg.ID)
 					continue
 				}
 				processed, err := r.processData([]byte(body))
 				if err != nil {
-					r.logger.Log("error", "processData error in Subscribe", map[string]interface{}{"error": err.Error()})
+					r.logger.Error(ctx, "processData error in Subscribe", map[string]interface{}{"error": err.Error()})
 				}
 				var handlerErr error
 				for attempt := 1; attempt <= r.maxRetries; attempt++ {
@@ -214,7 +229,7 @@ func (r *RedisTransport) Subscribe(stream string, handler HandlerFunc) error {
 					if handlerErr == nil {
 						break
 					}
-					r.logger.Log("error", "Handler error", map[string]interface{}{
+					r.logger.Error(ctx, "Handler error", map[string]interface{}{
 						"attempt": attempt,
 						"msgID":   msg.ID,
 						"error":   handlerErr.Error(),
@@ -224,9 +239,9 @@ func (r *RedisTransport) Subscribe(stream string, handler HandlerFunc) error {
 				if handlerErr == nil {
 					r.client.XAck(ctx, s.Stream, group, msg.ID)
 				} else {
-					r.logger.Log("error", "Handler failed after retries; sending to DLQ", map[string]interface{}{"msgID": msg.ID})
+					r.logger.Error(ctx, "Handler failed after retries; sending to DLQ", map[string]interface{}{"msgID": msg.ID})
 					if dlqErr := PublishToDLQ(ctx, r.client, r.dlqStream, stream, body); dlqErr != nil {
-						r.logger.Log("error", "Failed to publish to DLQ", map[string]interface{}{"error": dlqErr.Error()})
+						r.logger.Error(ctx, "Failed to publish to DLQ", map[string]interface{}{"error": dlqErr.Error()})
 					}
 					r.client.XAck(ctx, s.Stream, group, msg.ID)
 				}

@@ -4,15 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
-	"caaspay-core/api/config"
+	"github.com/caaspay/caaspay-core/internal/config"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/sdk/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/ext"
 )
 
 var (
@@ -26,26 +27,28 @@ var (
 // Metrics manages monitoring for services.
 type Metrics struct {
 	ServiceName string
-	cfg         *config.MetricsConfig
+	cfg         *config.ObservabilityConfig
 }
 
 // NewMetrics initializes OpenTelemetry with Prometheus and DataDog based on config.
-func NewMetrics(cfg *config.MetricsConfig) *Metrics {
-	if !cfg.Enabled {
+func NewMetrics(serviceName string, cfg *config.ObservabilityConfig) (*Metrics, error) {
+	if !cfg.TracingEnabled {
 		log.Println("📉 Metrics disabled in configuration")
-		return &Metrics{}
+		return &Metrics{}, nil
 	}
 
-	if cfg.Provider == "prometheus" || cfg.Provider == "both" {
-		setupPrometheus(cfg)
+	if cfg.MetricsAdapter == "prometheus" || cfg.MetricsAdapter == "both" {
+		if err := setupPrometheus(cfg); err != nil {
+			return nil, err
+		}
 	}
 
-	if cfg.Provider == "datadog" || cfg.Provider == "both" {
+	if cfg.MetricsAdapter == "datadog" || cfg.MetricsAdapter == "both" {
 		setupDataDog(cfg)
 	}
 
 	// Create OpenTelemetry meter
-	meter = otel.Meter(cfg.ServiceName)
+	meter = otel.Meter(serviceName)
 
 	// Register metrics
 	requests, _ = meter.Int64Counter("service_requests")
@@ -55,41 +58,47 @@ func NewMetrics(cfg *config.MetricsConfig) *Metrics {
 
 	log.Println("✅ Metrics successfully initialized")
 	return &Metrics{
-		ServiceName: cfg.ServiceName,
+		ServiceName: serviceName,
 		cfg:         cfg,
-	}
+	}, nil
 }
 
 // setupPrometheus configures Prometheus metrics exporter
-func setupPrometheus(cfg *config.MetricsConfig) {
+func setupPrometheus(cfg *config.ObservabilityConfig) error {
 	exporter, err := prometheus.New()
 	if err != nil {
-		log.Fatalf("❌ Failed to initialize Prometheus exporter: %v", err)
+		return fmt.Errorf("failed to initialize Prometheus exporter: %v", err)
 	}
-	provider := metric.NewMeterProvider(metric.WithReader(exporter))
+
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	otel.SetMeterProvider(provider)
 
-	log.Printf("📡 Prometheus metrics enabled on port %d\n", cfg.PrometheusPort)
+	log.Printf("📡 Prometheus metrics enabled on port %d\n", cfg.MetricsPort)
 	go func() {
-		http.Handle("/metrics", exporter)
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.PrometheusPort), nil); err != nil {
+		http.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			provider.Shutdown(context.Background())
+			w.WriteHeader(http.StatusOK)
+		}))
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.MetricsPort), nil); err != nil {
 			log.Fatalf("❌ Failed to start Prometheus endpoint: %v", err)
 		}
 	}()
+
+	return nil
 }
 
 // setupDataDog configures DataDog metrics and tracing
-func setupDataDog(cfg *config.MetricsConfig) {
+func setupDataDog(cfg *config.ObservabilityConfig) {
 	tracer.Start(
-		tracer.WithService(cfg.ServiceName),
-		tracer.WithEnv(cfg.Env),
+		tracer.WithService(cfg.MetricsHost),
+		tracer.WithEnv("development"),
 	)
-	log.Printf("📡 DataDog metrics enabled at %s\n", cfg.DataDogAddr)
+	log.Printf("📡 DataDog metrics enabled at %s\n", cfg.MetricsHost)
 }
 
 // Increment increases request count.
 func (m *Metrics) Increment(ctx context.Context, metricName string) {
-	_, span := tracer.StartSpanFromContext(ctx, metricName, tracer.SpanType(ext.SpanTypeWeb))
+	span, _ := tracer.StartSpanFromContext(ctx, metricName)
 	defer span.Finish()
 
 	requests.Add(ctx, 1)
@@ -98,6 +107,13 @@ func (m *Metrics) Increment(ctx context.Context, metricName string) {
 // RecordLatency measures request duration.
 func (m *Metrics) RecordLatency(ctx context.Context, duration time.Duration) {
 	latency.Record(ctx, duration.Seconds())
+}
+
+// RecordTiming records the duration of an operation.
+func (m *Metrics) RecordTiming(ctx context.Context, operation string, duration time.Duration) {
+	latency.Record(ctx, duration.Seconds(), metric.WithAttributes(
+		attribute.String("operation", operation),
+	))
 }
 
 // IncrementError tracks failed requests.
@@ -112,7 +128,7 @@ func (m *Metrics) TrackActiveRequests(ctx context.Context, delta int64) {
 
 // Shutdown cleans up DataDog tracing.
 func (m *Metrics) Shutdown() {
-	if m.cfg.Provider == "datadog" || m.cfg.Provider == "both" {
+	if m.cfg.MetricsAdapter == "datadog" || m.cfg.MetricsAdapter == "both" {
 		tracer.Stop()
 	}
 }

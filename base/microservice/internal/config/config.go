@@ -1,10 +1,7 @@
-
 package config
 
 import (
 	"fmt"
-	"os"
-	"time"
 
 	"github.com/spf13/viper"
 )
@@ -13,6 +10,12 @@ import (
 type Config struct {
 	Framework FrameworkConfig       `mapstructure:"framework"`
 	Service   map[string]interface{} `mapstructure:"service"` // Holds service-specific configs
+	// Compliance configuration
+	ComplianceEnabled bool   `mapstructure:"compliance_enabled"`
+	AppName          string `mapstructure:"app_name"`
+	Env              string `mapstructure:"env"`
+	PCIEnabled       bool   `mapstructure:"pci_enabled"`
+	EncryptionKey    string `mapstructure:"encryption_key"`
 }
 
 // FrameworkConfig contains settings for the core framework.
