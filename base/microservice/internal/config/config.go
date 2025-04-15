@@ -1,10 +1,13 @@
 package config
 
 import (
-	"encoding/json" // Importing the JSON package for marshaling/unmarshaling
 	"fmt"
+	"os"
+	"encoding/json" // Importing the JSON package for marshaling/unmarshaling
+	"path/filepath"
+	"strings"
 
-	"github.com/fsnotify/fsnotify" // For watching config file changes
+	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 )
 
@@ -115,36 +118,59 @@ func MapToStruct(data interface{}, out interface{}) error {
 	return nil
 }
 
-// LoadConfig loads both the framework and service-specific configurations.
-func LoadConfig(frameworkConfigPath string, serviceConfigPath string) (*Config, error) {
-	viper.SetConfigFile(frameworkConfigPath)
-	viper.SetConfigType("yaml")
-	viper.AutomaticEnv() // Bind ENV variables
-	viper.SetEnvPrefix("APP") // Set environment variable prefix (e.g., APP_SERVICE_NAME)
-
-	// Set default values
-	setDefaults()
-
-	// Read framework config file
-	if err := viper.ReadInConfig(); err != nil {
-		fmt.Println("⚠️ Warning: No framework config file found, using defaults & environment variables.")
+// LoadConfig dynamically loads all YAML configuration files from the specified directory
+// and merges them, respecting environment prefixes.
+func LoadConfig() (*Config, error) {
+	// Use CONFIG_DIRECTORY environment variable, default to "./config"
+	configDir := os.Getenv("CONFIG_DIRECTORY")
+	if configDir == "" {
+		configDir = "./config"
 	}
+
+	// Use ENVIRONMENT environment variable, default to "development"
+	environment := os.Getenv("ENVIRONMENT")
+	if environment == "" {
+		environment = "development"
+	}
+
+	// Set up Viper for configuration management
+	viper.AutomaticEnv()          // Bind ENV variables
+	viper.SetEnvPrefix("APP")     // Set environment variable prefix (e.g., APP_SERVICE_NAME)
+	setDefaults()                 // Set default configuration values
 
 	var config Config
-	if err := viper.Unmarshal(&config); err != nil {
-		return nil, fmt.Errorf("❌ Failed to parse framework config: %w", err)
+
+	// Read all YAML files in the directory
+	files, err := os.ReadDir(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config directory: %w", err)
 	}
 
-	// Load service-specific config
-	serviceViper := viper.New()
-	serviceViper.SetConfigFile(serviceConfigPath)
-	serviceViper.SetConfigType("yaml")
+	for _, file := range files {
+		// Filter files based on environment prefix and .yaml extension
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".yaml") && strings.HasPrefix(file.Name(), environment) {
+			filePath := filepath.Join(configDir, file.Name())
+			envViper := viper.New()
+			envViper.SetConfigFile(filePath)
+			envViper.SetConfigType("yaml")
 
-	if err := serviceViper.ReadInConfig(); err != nil {
-		fmt.Println("⚠️ Warning: No service config file found, using framework defaults.")
-	} else {
-		if err := serviceViper.Unmarshal(&config.Service); err != nil {
-			return nil, fmt.Errorf("❌ Failed to parse service config: %w", err)
+			// Read the individual YAML file
+			if err := envViper.ReadInConfig(); err != nil {
+				fmt.Printf("⚠️ Warning: Failed to read config file %s: %v\n", filePath, err)
+				continue
+			}
+
+			// Merge the configurations
+			if err := envViper.MergeInConfig(); err != nil {
+				fmt.Printf("⚠️ Warning: Failed to merge config file %s: %v\n", filePath, err)
+				continue
+			}
+
+			// Apply merged configurations to the main config struct
+			if err := envViper.Unmarshal(&config); err != nil {
+				fmt.Printf("⚠️ Warning: Failed to parse config file %s: %v\n", filePath, err)
+				continue
+			}
 		}
 	}
 
@@ -176,8 +202,11 @@ func (c *Config) Validate() error {
 	var missingFields []string
 
 	// Check for required fields and add them to the list of missing fields
-	if c.Framework.Transport.RedisAddress == "" {
-		missingFields = append(missingFields, "RedisAddress")
+	//if c.Framework.Transport.RedisAddress == "" {
+	//	missingFields = append(missingFields, "RedisAddress")
+	//}
+	if c.Framework.ServiceName == "" {
+		missingFields = append(missingFields, "Framework.ServiceName")
 	}
 	if c.AppName == "" {
 		missingFields = append(missingFields, "AppName")

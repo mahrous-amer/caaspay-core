@@ -14,7 +14,7 @@ import (
 
 func main() {
 	// Step 1: Initialize framework context
-	fwContext, err := framework.NewFrameworkContext("config/config.yaml", "config/service.yaml")
+	fwContext, err := framework.NewFrameworkContext()
 	if err != nil {
 		log.Fatalf("❌ Failed to initialize framework context: %v", err)
 	}
@@ -80,8 +80,8 @@ func runService(serviceStruct *service.ServiceStruct, fwContext *framework.Frame
 	case <-shutdownCtx.Done():
 		if shutdownCtx.Err() == context.DeadlineExceeded {
 			fwContext.Logger.Error(ctx, "❌ Shutdown timed out. Forcing exit.", nil)
-			os.Exit(1)
 		}
+		os.Exit(1)
 	}
 
 	fwContext.Logger.Info(ctx, "✅ Service stopped gracefully", nil)

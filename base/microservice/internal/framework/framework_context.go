@@ -25,9 +25,9 @@ type FrameworkContext struct {
 }
 
 // NewFrameworkContext initializes all framework components and returns a unified context.
-func NewFrameworkContext(configPath, servicePath string) (*FrameworkContext, error) {
+func NewFrameworkContext() (*FrameworkContext, error) {
 	// Load configuration
-	cfg, err := config.LoadConfig(configPath, servicePath)
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
