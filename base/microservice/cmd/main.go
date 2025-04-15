@@ -8,57 +8,81 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/caaspay/caaspay-core/internal/config"
-	"github.com/caaspay/caaspay-core/internal/logging"
+	"github.com/caaspay/caaspay-core/internal/framework"
 	"github.com/caaspay/caaspay-core/internal/service"
 )
 
 func main() {
-	// Load configuration
-	cfg, err := config.LoadConfig("config/config.yaml", "config/service.yaml")
+	// Step 1: Initialize framework context
+	fwContext, err := framework.NewFrameworkContext("config/config.yaml", "config/service.yaml")
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		log.Fatalf("❌ Failed to initialize framework context: %v", err)
 	}
 
-	// Initialize logger
-	logger := logging.NewLogger(cfg.Framework.ServiceName, cfg.Framework.Logging.Level, cfg.Framework.Logging.RedactSensitive)
-
-	// Create service instance
-	svc := service.NewService()
-
-	// Create service struct
-	serviceStruct, err := service.NewServiceStruct(cfg, svc)
+	// Step 2: Initialize service
+	serviceStruct, err := initializeService(fwContext)
 	if err != nil {
-		logger.Error(context.Background(), "Failed to create service struct", map[string]interface{}{
+		fwContext.Logger.Error(context.Background(), "❌ Service initialization failed", map[string]interface{}{
 			"error": err.Error(),
 		})
 		os.Exit(1)
 	}
 
-	// Set up signal handling
+	// Step 3: Run the service with graceful shutdown
+	runService(serviceStruct, fwContext)
+}
+
+// initializeService sets up the service with the provided framework context.
+func initializeService(fwContext *framework.FrameworkContext) (*service.ServiceStruct, error) {
+	start := time.Now()
+	svc := service.NewService()
+	serviceStruct, err := service.NewServiceStruct(fwContext, svc)
+	if err != nil {
+		return nil, err
+	}
+	fwContext.Logger.Info(context.Background(), "✅ Service initialized", map[string]interface{}{
+		"duration": time.Since(start).String(),
+	})
+	return serviceStruct, nil
+}
+
+// runService starts the service and handles graceful shutdown.
+func runService(serviceStruct *service.ServiceStruct, fwContext *framework.FrameworkContext) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Channel to capture OS signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start the service
+	// Start the service in a separate goroutine
 	go func() {
-		serviceStruct.Run(svc)
+		fwContext.Logger.Info(ctx, "🚀 Service is starting...", nil)
+		serviceStruct.Run(serviceStruct)
 	}()
 
-	// Wait for shutdown signal
-	<-sigChan
-	logger.Info(context.Background(), "Shutdown signal received", nil)
+	// Wait for a shutdown signal
+	sig := <-sigChan
+	fwContext.Logger.Info(ctx, "⚠️ Shutdown signal received", map[string]interface{}{
+		"signal": sig.String(),
+	})
 
-	// Create shutdown context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Create a shutdown context with a timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer shutdownCancel()
 
-	// Shutdown the service
+	// Gracefully shut down the service
+	fwContext.Logger.Info(ctx, "🛑 Shutting down service...", nil)
 	serviceStruct.Shutdown()
 
-	// Wait for all goroutines to complete
+	// Wait for all goroutines to complete or timeout
 	select {
-	case <-ctx.Done():
-		logger.Error(context.Background(), "Shutdown timeout", nil)
-		os.Exit(1)
+	case <-shutdownCtx.Done():
+		if shutdownCtx.Err() == context.DeadlineExceeded {
+			fwContext.Logger.Error(ctx, "❌ Shutdown timed out. Forcing exit.", nil)
+			os.Exit(1)
+		}
 	}
+
+	fwContext.Logger.Info(ctx, "✅ Service stopped gracefully", nil)
 }

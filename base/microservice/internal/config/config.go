@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json" // Importing the JSON package for marshaling/unmarshaling
 	"fmt"
 
 	"github.com/fsnotify/fsnotify" // For watching config file changes
@@ -9,26 +10,26 @@ import (
 
 // Config represents the combined framework and service configurations.
 type Config struct {
-	Framework FrameworkConfig       `mapstructure:"framework"`
-	Service   map[string]interface{} `mapstructure:"service"` // Holds service-specific configs
-	// Compliance configuration
-	ComplianceEnabled bool   `mapstructure:"compliance_enabled"`
-	AppName          string `mapstructure:"app_name"`
-	Env              string `mapstructure:"env"`
-	PCIEnabled       bool   `mapstructure:"pci_enabled"`
-	EncryptionKey    string `mapstructure:"encryption_key"`
+	Framework         FrameworkConfig       `mapstructure:"framework"`
+	Service           map[string]interface{} `mapstructure:"service"` // Holds service-specific configs
+	ComplianceEnabled bool                  `mapstructure:"compliance_enabled"`
+	AppName           string                `mapstructure:"app_name"`
+	Env               string                `mapstructure:"env"`
+	PCIEnabled        bool                  `mapstructure:"pci_enabled"`
+	EncryptionKey     string                `mapstructure:"encryption_key"`
 }
 
 // FrameworkConfig contains settings for the core framework.
 type FrameworkConfig struct {
-	ServiceName       string            `mapstructure:"service_name"`
-	Version           string            `mapstructure:"version"`
-	RPC               RPCConfig         `mapstructure:"rpc"`
-	Transport         TransportConfig   `mapstructure:"transport"`
-	Logging           LoggingConfig     `mapstructure:"logging"`
+	ServiceName       string              `mapstructure:"service_name"`
+	Version           string              `mapstructure:"version"`
+	RPC               RPCConfig           `mapstructure:"rpc"`
+	Transport         TransportConfig     `mapstructure:"transport"`
+	Logging           LoggingConfig       `mapstructure:"logging"`
 	Observability     ObservabilityConfig `mapstructure:"observability"`
-	Security          SecurityConfig    `mapstructure:"security"`
-	EnableDynamicReload bool            `mapstructure:"enable_dynamic_reload"`
+	Security          SecurityConfig      `mapstructure:"security"`
+	Storage           StorageConfig       `mapstructure:"storage"`
+	EnableDynamicReload bool              `mapstructure:"enable_dynamic_reload"`
 }
 
 // RPCConfig contains settings for handling RPC responses.
@@ -77,6 +78,41 @@ type SecurityConfig struct {
 	JWTSigningMethod string `mapstructure:"jwt_signing_method"` // "HS256", "RS256", etc.
 	EnableRBAC       bool   `mapstructure:"enable_rbac"`
 	TLSStrict        bool   `mapstructure:"tls_strict"` // Enforce strict TLS connections
+}
+
+// StorageConfig defines storage-related configurations.
+type StorageConfig struct {
+	Type string `yaml:"type"` // Example: "inmemory", "redis", "sql"
+}
+
+// ServiceConfig defines service-specific configurations.
+type ServiceConfig struct {
+	Port        int    `json:"port" mapstructure:"port"`             // Port for the service
+	Environment string `json:"environment" mapstructure:"environment"` // Environment: development, staging, production
+	DebugMode   bool   `json:"debug_mode" mapstructure:"debug_mode"`  // Enable or disable debug mode
+}
+
+// DefaultServiceConfig returns default values for service-specific configurations.
+func DefaultServiceConfig() *ServiceConfig {
+	return &ServiceConfig{
+		Port:        8080,            // Default port
+		Environment: "development",  // Default environment
+		DebugMode:   true,           // Debug mode enabled by default
+	}
+}
+
+// MapToStruct maps a map[string]interface{} to a struct.
+func MapToStruct(data interface{}, out interface{}) error {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal map to JSON: %w", err)
+	}
+
+	if err := json.Unmarshal(jsonData, out); err != nil {
+		return fmt.Errorf("failed to unmarshal JSON to struct: %w", err)
+	}
+
+	return nil
 }
 
 // LoadConfig loads both the framework and service-specific configurations.
