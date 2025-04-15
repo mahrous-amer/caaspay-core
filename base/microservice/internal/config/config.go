@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 
+	"github.com/fsnotify/fsnotify" // For watching config file changes
 	"github.com/spf13/viper"
 )
 
@@ -20,13 +21,14 @@ type Config struct {
 
 // FrameworkConfig contains settings for the core framework.
 type FrameworkConfig struct {
-	ServiceName   string            `mapstructure:"service_name"`
-	Version       string            `mapstructure:"version"`
-	RPC           RPCConfig         `mapstructure:"rpc"`
-	Transport     TransportConfig   `mapstructure:"transport"`
-	Logging       LoggingConfig     `mapstructure:"logging"`
-	Observability ObservabilityConfig `mapstructure:"observability"`
-	Security      SecurityConfig    `mapstructure:"security"`
+	ServiceName       string            `mapstructure:"service_name"`
+	Version           string            `mapstructure:"version"`
+	RPC               RPCConfig         `mapstructure:"rpc"`
+	Transport         TransportConfig   `mapstructure:"transport"`
+	Logging           LoggingConfig     `mapstructure:"logging"`
+	Observability     ObservabilityConfig `mapstructure:"observability"`
+	Security          SecurityConfig    `mapstructure:"security"`
+	EnableDynamicReload bool            `mapstructure:"enable_dynamic_reload"`
 }
 
 // RPCConfig contains settings for handling RPC responses.
@@ -82,6 +84,7 @@ func LoadConfig(frameworkConfigPath string, serviceConfigPath string) (*Config, 
 	viper.SetConfigFile(frameworkConfigPath)
 	viper.SetConfigType("yaml")
 	viper.AutomaticEnv() // Bind ENV variables
+	viper.SetEnvPrefix("APP") // Set environment variable prefix (e.g., APP_SERVICE_NAME)
 
 	// Set default values
 	setDefaults()
@@ -109,7 +112,50 @@ func LoadConfig(frameworkConfigPath string, serviceConfigPath string) (*Config, 
 		}
 	}
 
+	// Validate the loaded configuration
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("❌ Configuration validation failed: %w", err)
+	}
+
+	// Enable dynamic reloading if configured
+	if config.Framework.EnableDynamicReload {
+		viper.WatchConfig()
+		viper.OnConfigChange(func(e fsnotify.Event) {
+			fmt.Println("⚡ Configuration file changed:", e.Name)
+			if err := viper.Unmarshal(&config); err != nil {
+				fmt.Println("❌ Failed to reload configuration:", err)
+			} else {
+				fmt.Println("✅ Configuration reloaded successfully.")
+			}
+		})
+	} else {
+		fmt.Println("🛑 Dynamic configuration reloading is disabled.")
+	}
+
 	return &config, nil
+}
+
+// Validate ensures the configuration is complete and correct.
+func (c *Config) Validate() error {
+	var missingFields []string
+
+	// Check for required fields and add them to the list of missing fields
+	if c.Framework.Transport.RedisAddress == "" {
+		missingFields = append(missingFields, "RedisAddress")
+	}
+	if c.AppName == "" {
+		missingFields = append(missingFields, "AppName")
+	}
+	if c.EncryptionKey == "" {
+		missingFields = append(missingFields, "EncryptionKey")
+	}
+
+	// If there are any missing fields, return an error with all missing fields listed
+	if len(missingFields) > 0 {
+		return fmt.Errorf("Missing required fields: %s", missingFields)
+	}
+
+	return nil
 }
 
 // setDefaults initializes default values for framework configuration.
@@ -144,5 +190,5 @@ func setDefaults() {
 	viper.SetDefault("framework.security.jwt_signing_method", "HS256")
 	viper.SetDefault("framework.security.enable_rbac", true)
 	viper.SetDefault("framework.security.tls_strict", false)
+	viper.SetDefault("framework.enable_dynamic_reload", false) // Dynamic reload disabled by default
 }
-
