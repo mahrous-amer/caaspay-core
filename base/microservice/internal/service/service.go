@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"sync"
 	"time"
@@ -72,7 +73,9 @@ func (s *ServiceStruct) registerRPCMethods() error {
 			continue
 		}
 
-		if method.Type.NumIn() == 3 && method.Type.In(1).String() == "context.Context" && method.Type.In(2).String() == "[]byte" {
+		if method.Type.NumIn() == 3 &&
+			method.Type.In(1).String() == "context.Context" &&
+			method.Type.In(2).String() == "[]byte" {
 			stream := method.Name
 			if err := s.registerRPCMethod(stream, map[string]string{"stream": stream}); err != nil {
 				return fmt.Errorf("failed to register RPC method %s: %w", method.Name, err)
@@ -95,25 +98,21 @@ func (s *ServiceStruct) registerRPCMethod(methodName string, config map[string]s
 	}
 
 	return s.frameworkCtx.Transport.Subscribe(stream, func(ctx context.Context, data []byte) ([]byte, error) {
-		// Metrics and compliance tracking
 		start := time.Now()
 		s.frameworkCtx.Metrics.Increment(ctx, "rpc_request")
 		defer s.frameworkCtx.Metrics.RecordTiming(ctx, "rpc_request_time", time.Since(start))
-    defer s.frameworkCtx.Compliance.TrackEvent(ctx, "rpc_request")
+		defer s.frameworkCtx.Compliance.TrackEvent(ctx, "rpc_request")
 
-		// Call the method
 		args := []reflect.Value{
 			reflect.ValueOf(ctx),
 			reflect.ValueOf(data),
 		}
 		results := method.Call(args)
 
-		// Handle errors
 		if len(results) > 0 && !results[len(results)-1].IsNil() {
 			return nil, results[len(results)-1].Interface().(error)
 		}
 
-		// Return the result
 		if len(results) > 0 {
 			return results[0].Interface().([]byte), nil
 		}
@@ -123,24 +122,48 @@ func (s *ServiceStruct) registerRPCMethod(methodName string, config map[string]s
 
 // Run starts the service and its lifecycle.
 func (s *ServiceStruct) Run(serviceInstance interface{}) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	s.frameworkCtx.Logger.Info(ctx, "Starting service", map[string]interface{}{
 		"name": s.frameworkCtx.ServiceName,
 	})
+
 	s.AutoRegisterFunctions(serviceInstance)
+
 	<-s.shutdownCh
-	s.frameworkCtx.Logger.Info(ctx, "Shutting down service", map[string]interface{}{
+	cancel()
+
+	s.frameworkCtx.Logger.Info(ctx, "🛑 Shutting down service...", map[string]interface{}{
 		"name": s.frameworkCtx.ServiceName,
 	})
-	s.wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.wg.Wait()
+	}()
+
+	select {
+	case <-done:
+		s.frameworkCtx.Logger.Info(ctx, "✅ Shutdown complete", nil)
+	case <-time.After(10 * time.Second):
+		s.frameworkCtx.Logger.Error(ctx, "❌ Shutdown timed out. Forcing exit", nil)
+		os.Exit(1) // <<<< 🛑 Force kill the process here
+	}
+
+	// Optional: even clean exit after shutdown complete
+	os.Exit(0)
 }
 
-// Shutdown gracefully shuts down the service.
+// Shutdown gracefully signals the service to stop.
 func (s *ServiceStruct) Shutdown() {
-	s.frameworkCtx.Logger.Info(context.Background(), "Shutting down service", map[string]interface{}{
-		"name": s.frameworkCtx.ServiceName,
-	})
-	close(s.shutdownCh)
+	select {
+	case <-s.shutdownCh:
+		// already closed
+	default:
+		close(s.shutdownCh)
+	}
 }
 
 // AutoRegisterFunctions auto-registers eligible framework methods.
@@ -153,17 +176,14 @@ func (s *ServiceStruct) AutoRegisterFunctions(serviceInstance interface{}) {
 		methodValue := svcValue.Method(i)
 		streamName := method.Name
 
-		if method.Type.NumIn() == 3 && method.Type.In(1).String() == "context.Context" && method.Type.In(2).String() == "[]byte" {
+		switch {
+		case method.Type.NumIn() == 3 && method.Type.In(1).String() == "context.Context" && method.Type.In(2).String() == "[]byte":
 			s.registerRPCMethod(streamName, map[string]string{"stream": streamName})
-		}
 
-		// Poll emitter
-		if method.Type.NumIn() == 2 && method.Type.In(1).String() == "context.Context" {
+		case method.Type.NumIn() == 2 && method.Type.In(1).String() == "context.Context":
 			s.registerEmitterPull(streamName, 10*time.Second, methodValue)
-		}
 
-		// Pull emitter
-		if method.Type.NumIn() == 3 && method.Type.In(1).String() == "context.Context" && method.Type.In(2).String() == "[][]byte" {
+		case method.Type.NumIn() == 3 && method.Type.In(1).String() == "context.Context" && method.Type.In(2).String() == "[][]byte":
 			s.registerReceiver(streamName, 10, methodValue)
 		}
 	}
@@ -174,6 +194,9 @@ func (s *ServiceStruct) registerEmitterPull(stream string, interval time.Duratio
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -182,14 +205,11 @@ func (s *ServiceStruct) registerEmitterPull(stream string, interval time.Duratio
 			case <-s.shutdownCh:
 				return
 			case <-ticker.C:
-				ctx := context.Background()
 				args := []reflect.Value{reflect.ValueOf(ctx)}
 				start := time.Now()
 
-				// Call the method
 				results := method.Call(args)
 
-				// Handle errors
 				if len(results) > 0 && !results[len(results)-1].IsNil() {
 					s.frameworkCtx.Logger.Error(ctx, "Emitter pull error", map[string]interface{}{
 						"stream": stream,
@@ -198,12 +218,11 @@ func (s *ServiceStruct) registerEmitterPull(stream string, interval time.Duratio
 					continue
 				}
 
-				// Publish results
 				if len(results) > 0 {
 					if data, ok := results[0].Interface().([]byte); ok {
 						s.frameworkCtx.Metrics.Increment(ctx, "emitter_pulled")
 						s.frameworkCtx.Metrics.RecordTiming(ctx, "emitter_pulling_time", time.Since(start))
-            s.frameworkCtx.Compliance.TrackEvent(ctx, "emitter_pull")
+						s.frameworkCtx.Compliance.TrackEvent(ctx, "emitter_pull")
 
 						if err := s.frameworkCtx.Transport.Publish(ctx, stream, data); err != nil {
 							s.frameworkCtx.Logger.Error(ctx, "Failed to publish message", map[string]interface{}{
@@ -232,13 +251,10 @@ func (s *ServiceStruct) registerReceiver(stream string, batchSize int, method re
 				args := []reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(batch)}
 				start := time.Now()
 
-				// Call the method
 				results := method.Call(args)
 
-				// Reset the batch
 				batch = batch[:0]
 
-				// Handle errors
 				if len(results) > 0 && !results[len(results)-1].IsNil() {
 					s.frameworkCtx.Logger.Error(ctx, "Receiver error", map[string]interface{}{
 						"stream": stream,
@@ -249,8 +265,7 @@ func (s *ServiceStruct) registerReceiver(stream string, batchSize int, method re
 
 				s.frameworkCtx.Metrics.Increment(ctx, "receiver_handled")
 				s.frameworkCtx.Metrics.RecordTiming(ctx, "receiver_handling_time", time.Since(start))
-        s.frameworkCtx.Compliance.TrackEvent(ctx, "receiver_message") // Fixed argument mismatch
-
+				s.frameworkCtx.Compliance.TrackEvent(ctx, "receiver_message")
 			}
 			return nil, nil
 		}); err != nil {

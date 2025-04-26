@@ -118,80 +118,84 @@ func MapToStruct(data interface{}, out interface{}) error {
 	return nil
 }
 
-// LoadConfig dynamically loads all YAML configuration files from the specified directory
-// and merges them, respecting environment prefixes.
+// LoadConfig dynamically loads configuration files and environment variables.
 func LoadConfig() (*Config, error) {
-	// Use CONFIG_DIRECTORY environment variable, default to "./config"
 	configDir := os.Getenv("CONFIG_DIRECTORY")
 	if configDir == "" {
 		configDir = "./config"
 	}
 
-	// Use ENVIRONMENT environment variable, default to "development"
 	environment := os.Getenv("ENVIRONMENT")
 	if environment == "" {
 		environment = "development"
 	}
 
-	// Set up Viper for configuration management
-	viper.AutomaticEnv()          // Bind ENV variables
-	viper.SetEnvPrefix("APP")     // Set environment variable prefix (e.g., APP_SERVICE_NAME)
-	setDefaults()                 // Set default configuration values
+	mainViper := viper.New()
+	mainViper.SetEnvPrefix("APP")
+	mainViper.AutomaticEnv()
+	setDefaults(mainViper)
 
-	var config Config
-
-	// Read all YAML files in the directory
 	files, err := os.ReadDir(configDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config directory: %w", err)
 	}
 
+	merged := false
+
 	for _, file := range files {
-		// Filter files based on environment prefix and .yaml extension
-		if !file.IsDir() && strings.HasSuffix(file.Name(), ".yaml") && strings.HasPrefix(file.Name(), environment) {
-			filePath := filepath.Join(configDir, file.Name())
-			envViper := viper.New()
-			envViper.SetConfigFile(filePath)
-			envViper.SetConfigType("yaml")
-
-			// Read the individual YAML file
-			if err := envViper.ReadInConfig(); err != nil {
-				fmt.Printf("⚠️ Warning: Failed to read config file %s: %v\n", filePath, err)
-				continue
-			}
-
-			// Merge the configurations
-			if err := envViper.MergeInConfig(); err != nil {
-				fmt.Printf("⚠️ Warning: Failed to merge config file %s: %v\n", filePath, err)
-				continue
-			}
-
-			// Apply merged configurations to the main config struct
-			if err := envViper.Unmarshal(&config); err != nil {
-				fmt.Printf("⚠️ Warning: Failed to parse config file %s: %v\n", filePath, err)
-				continue
-			}
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".yaml") || !strings.HasPrefix(file.Name(), environment) {
+			continue
 		}
+
+		filePath := filepath.Join(configDir, file.Name())
+		fmt.Printf("📖 Reading config file: %s\n", filePath)
+
+		envViper := viper.New()
+		envViper.SetConfigFile(filePath)
+		envViper.SetConfigType("yaml")
+
+		if err := envViper.ReadInConfig(); err != nil {
+			fmt.Printf("⚠️ Warning: Failed to read config %s: %v\n", filePath, err)
+			continue
+		}
+
+		if err := mainViper.MergeConfigMap(envViper.AllSettings()); err != nil {
+			fmt.Printf("⚠️ Warning: Failed to merge config %s: %v\n", filePath, err)
+			continue
+		}
+
+		merged = true
 	}
 
-	// Validate the loaded configuration
+	if !merged {
+    absPath, err := filepath.Abs(configDir)
+    if err != nil {
+        absPath = configDir
+    }
+    fmt.Printf("⚠️ No environment-specific config files found, using defaults + env vars from %s\n", absPath)
+  }
+
+	var config Config
+	if err := mainViper.Unmarshal(&config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
 	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("❌ Configuration validation failed: %w", err)
+		return nil, fmt.Errorf("configuration validation failed: %w", err)
 	}
 
-	// Enable dynamic reloading if configured
 	if config.Framework.EnableDynamicReload {
-		viper.WatchConfig()
-		viper.OnConfigChange(func(e fsnotify.Event) {
+		mainViper.WatchConfig()
+		mainViper.OnConfigChange(func(e fsnotify.Event) {
 			fmt.Println("⚡ Configuration file changed:", e.Name)
-			if err := viper.Unmarshal(&config); err != nil {
-				fmt.Println("❌ Failed to reload configuration:", err)
+			if err := mainViper.Unmarshal(&config); err != nil {
+				fmt.Println("❌ Failed to reload config:", err)
 			} else {
 				fmt.Println("✅ Configuration reloaded successfully.")
 			}
 		})
 	} else {
-		fmt.Println("🛑 Dynamic configuration reloading is disabled.")
+		fmt.Println("🛑 Dynamic config reloading disabled")
 	}
 
 	return &config, nil
@@ -224,36 +228,39 @@ func (c *Config) Validate() error {
 }
 
 // setDefaults initializes default values for framework configuration.
-func setDefaults() {
-	viper.SetDefault("framework.service_name", "example-service")
-	viper.SetDefault("framework.version", "1.0.0")
-	viper.SetDefault("framework.rpc.response_stream_type", "dedicated")
-	viper.SetDefault("framework.rpc.max_retries", 3)
-	viper.SetDefault("framework.rpc.timeout_ms", 5000)
-	viper.SetDefault("framework.transport.broker_type", "redis")
-	viper.SetDefault("framework.transport.redis_address", "redis://localhost:6379")
-	viper.SetDefault("framework.transport.redis_cache", false)
-	viper.SetDefault("framework.transport.use_trim_exact", false)
-	viper.SetDefault("framework.transport.use_cluster", false)
-	viper.SetDefault("framework.transport.pool_count", 10)
-	viper.SetDefault("framework.transport.wait_time_ms", 15000)
-	viper.SetDefault("framework.transport.use_encryption", true)
-	viper.SetDefault("framework.transport.use_compression", true)
-	viper.SetDefault("framework.transport.tls_required", false)
-	viper.SetDefault("framework.logging.level", "info")
-	viper.SetDefault("framework.logging.format", "json")
-	viper.SetDefault("framework.logging.redact_sensitive", true)
-	viper.SetDefault("framework.logging.debug_enabled", false)
-	viper.SetDefault("framework.observability.tracing_enabled", true)
-	viper.SetDefault("framework.observability.opentracing_host", "localhost")
-	viper.SetDefault("framework.observability.opentracing_port", 6832)
-	viper.SetDefault("framework.observability.metrics_adapter", "statsd")
-	viper.SetDefault("framework.observability.metrics_host", "localhost")
-	viper.SetDefault("framework.observability.metrics_port", 8125)
-	viper.SetDefault("framework.observability.log_level_metrics", true)
-	viper.SetDefault("framework.security.enable_jwt", true)
-	viper.SetDefault("framework.security.jwt_signing_method", "HS256")
-	viper.SetDefault("framework.security.enable_rbac", true)
-	viper.SetDefault("framework.security.tls_strict", false)
-	viper.SetDefault("framework.enable_dynamic_reload", false) // Dynamic reload disabled by default
+func setDefaults(v *viper.Viper) {
+  v.SetDefault("app_name", "example")
+  v.SetDefault("encryption_key", "Defaultfff")
+	v.SetDefault("framework.service_name", "example-service")
+	v.SetDefault("framework.version", "1.0.0")
+	v.SetDefault("framework.rpc.response_stream_type", "dedicated")
+	v.SetDefault("framework.rpc.max_retries", 3)
+	v.SetDefault("framework.rpc.timeout_ms", 5000)
+	v.SetDefault("framework.transport.broker_type", "redis")
+	v.SetDefault("framework.transport.redis_address", "redis://localhost:6379")
+	v.SetDefault("framework.transport.redis_cache", false)
+	v.SetDefault("framework.transport.use_trim_exact", false)
+	v.SetDefault("framework.transport.use_cluster", false)
+	v.SetDefault("framework.transport.pool_count", 10)
+	v.SetDefault("framework.transport.wait_time_ms", 15000)
+	v.SetDefault("framework.transport.use_encryption", true)
+	v.SetDefault("framework.transport.use_compression", true)
+	v.SetDefault("framework.transport.tls_required", false)
+	v.SetDefault("framework.logging.level", "info")
+	v.SetDefault("framework.logging.format", "json")
+	v.SetDefault("framework.logging.redact_sensitive", true)
+	v.SetDefault("framework.logging.debug_enabled", false)
+	v.SetDefault("framework.observability.tracing_enabled", true)
+	v.SetDefault("framework.observability.opentracing_host", "localhost")
+	v.SetDefault("framework.observability.opentracing_port", 6832)
+	v.SetDefault("framework.observability.metrics_adapter", "statsd")
+	v.SetDefault("framework.observability.metrics_host", "localhost")
+	v.SetDefault("framework.observability.metrics_port", 8125)
+	v.SetDefault("framework.observability.log_level_metrics", true)
+	v.SetDefault("framework.security.enable_jwt", true)
+	v.SetDefault("framework.security.jwt_signing_method", "HS256")
+	v.SetDefault("framework.security.enable_rbac", true)
+	v.SetDefault("framework.security.tls_strict", false)
+	v.SetDefault("framework.enable_dynamic_reload", false) // Dynamic reload disabled by default
+  v.SetDefault("framework.storage.type", "inmemory")
 }
