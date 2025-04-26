@@ -1,6 +1,6 @@
 module github.com/caaspay/caaspay-core
 
-go 1.22.0
+go 1.22.2
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
