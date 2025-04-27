@@ -43,6 +43,7 @@ type ServiceStruct struct {
 	shutdownCh      chan struct{}
 	doneCh          chan struct{}
 	wg              sync.WaitGroup
+	Lifecycle       *ServiceLifecycle
 }
 
 // NewServiceStruct initializes a new service instance with FrameworkContext.
@@ -56,6 +57,7 @@ func NewServiceStruct(fwCtx *framework.FrameworkContext, serviceInstance interfa
 		serviceInstance: serviceInstance,
 		shutdownCh:      make(chan struct{}),
 		doneCh:          make(chan struct{}),
+		Lifecycle:       NewServiceLifecycle(),
 	}
 
 	return service, nil

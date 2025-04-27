@@ -29,6 +29,7 @@ type FrameworkConfig struct {
 	RPC                 RPCConfig           `mapstructure:"rpc"`
 	Transport           TransportConfig     `mapstructure:"transport"`
 	Logging             LoggingConfig       `mapstructure:"logging"`
+	Health              HealthConfig        `mapstructure:"health"`
 	Observability       ObservabilityConfig `mapstructure:"observability"`
 	Security            SecurityConfig      `mapstructure:"security"`
 	Storage             StorageConfig       `mapstructure:"storage"`
@@ -62,6 +63,11 @@ type LoggingConfig struct {
 	Format          string `mapstructure:"format"` // "json" or "text"
 	RedactSensitive bool   `mapstructure:"redact_sensitive"`
 	DebugEnabled    bool   `mapstructure:"debug_enabled"` // Toggle verbose debugging logs
+}
+
+// HealthConfig contains health and monitor related settings.
+type HealthConfig struct {
+	InternalHealthChecker bool `mapstructure:"internal_health_checker"`
 }
 
 // ObservabilityConfig contains observability settings.
@@ -249,6 +255,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.logging.level", "info")
 	v.SetDefault("framework.logging.format", "json")
 	v.SetDefault("framework.logging.redact_sensitive", true)
+	v.SetDefault("framework.health.internal_health_checker", true)
 	v.SetDefault("framework.logging.debug_enabled", false)
 	v.SetDefault("framework.observability.tracing_enabled", true)
 	v.SetDefault("framework.observability.opentracing_host", "localhost")

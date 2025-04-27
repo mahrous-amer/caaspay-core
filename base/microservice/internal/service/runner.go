@@ -11,7 +11,6 @@ import (
 	"github.com/caaspay/caaspay-core/internal/framework"
 )
 
-// RunFrameworkService runs a developer-provided service inside the framework.
 func RunFrameworkService(devService Service) {
 	for {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -29,11 +28,11 @@ func RunFrameworkService(devService Service) {
 			os.Exit(1)
 		}
 
-		// OS signal and crash channel
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		crashChan := make(chan error, 1)
 
+		// 🚀 Start service in background
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -47,6 +46,11 @@ func RunFrameworkService(devService Service) {
 			crashChan <- nil // Normal exit
 		}()
 
+		// 🧠 Start internal health checker ONLY if config says so
+		if fwContext.Config.Framework.Health.InternalHealthChecker {
+			go startInternalHealthCheck(fwContext, serviceStruct, devService)
+		}
+
 		select {
 		case sig := <-sigChan:
 			fwContext.Logger.Info(ctx, "⚠️ Shutdown signal received", map[string]interface{}{
@@ -58,7 +62,7 @@ func RunFrameworkService(devService Service) {
 			defer shutdownCancel()
 
 			select {
-			case <-serviceStruct.Done(): // 💥 wait for real shutdown
+			case <-serviceStruct.Done():
 				fwContext.Logger.Info(ctx, "✅ Service shutdown complete", nil)
 			case <-shutdownCtx.Done():
 				fwContext.Logger.Error(ctx, "❌ Shutdown timeout. Forcing exit.", nil)
@@ -73,12 +77,40 @@ func RunFrameworkService(devService Service) {
 					"error": err.Error(),
 				})
 				cancel()
-				time.Sleep(5 * time.Second) // backoff before restart
+				time.Sleep(5 * time.Second)
 				continue
 			} else {
 				fwContext.Logger.Info(ctx, "✅ Service exited cleanly", nil)
 				os.Exit(0)
 			}
+		}
+	}
+}
+
+func startInternalHealthCheck(fwContext *framework.FrameworkContext, serviceStruct *ServiceStruct, devService Service) {
+	ctx := context.Background()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := devService.HealthCheck(healthCtx)
+			cancel()
+
+			if err != nil {
+				fwContext.Logger.Error(ctx, "❌ Internal Health Check failed, shutting down service", map[string]interface{}{
+					"error": err.Error(),
+				})
+				serviceStruct.Shutdown()
+				return
+			}
+
+			serviceStruct.Lifecycle.MarkReady()
+
+		case <-serviceStruct.Done():
+			return
 		}
 	}
 }

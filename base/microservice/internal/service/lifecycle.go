@@ -1,49 +1,46 @@
 package service
 
 import (
+	"sync/atomic"
 	"time"
 )
 
-// ServiceLifecycle handles startup, readiness, liveness probes.
 type ServiceLifecycle struct {
-	started   bool
-	ready     bool
-	shutdown  bool
+	started   int32
+	ready     int32
+	shutdown  int32
 	timestamp time.Time
 }
 
 func NewServiceLifecycle() *ServiceLifecycle {
 	return &ServiceLifecycle{
-		started:   false,
-		ready:     false,
-		shutdown:  false,
 		timestamp: time.Now(),
 	}
 }
 
 func (l *ServiceLifecycle) MarkStarted() {
-	l.started = true
+	atomic.StoreInt32(&l.started, 1)
 	l.timestamp = time.Now()
 }
 
 func (l *ServiceLifecycle) MarkReady() {
-	l.ready = true
+	atomic.StoreInt32(&l.ready, 1)
 }
 
 func (l *ServiceLifecycle) MarkShutdown() {
-	l.shutdown = true
+	atomic.StoreInt32(&l.shutdown, 1)
 }
 
 func (l *ServiceLifecycle) IsStarted() bool {
-	return l.started
+	return atomic.LoadInt32(&l.started) == 1
 }
 
 func (l *ServiceLifecycle) IsReady() bool {
-	return l.ready
+	return atomic.LoadInt32(&l.ready) == 1
 }
 
 func (l *ServiceLifecycle) IsShutdown() bool {
-	return l.shutdown
+	return atomic.LoadInt32(&l.shutdown) == 1
 }
 
 func (l *ServiceLifecycle) Uptime() time.Duration {
