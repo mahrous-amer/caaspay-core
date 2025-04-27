@@ -63,13 +63,13 @@ func (l *Logger) LogWithContext(ctx context.Context, level, message string, fiel
 
 	// Build log entry
 	logEntry := map[string]interface{}{
-		"time":        time.Now().Format(time.RFC3339),
-		"level":       level,
-		"service":     l.serviceName,
-		"message":     message,
-		"trace_id":    traceID,
-		"span_id":     spanID,
-		"fields":      fields,
+		"time":     time.Now().Format(time.RFC3339),
+		"level":    level,
+		"service":  l.serviceName,
+		"message":  message,
+		"trace_id": traceID,
+		"span_id":  spanID,
+		"fields":   fields,
 	}
 
 	// Convert log entry to JSON

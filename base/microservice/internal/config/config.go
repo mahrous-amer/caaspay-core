@@ -1,9 +1,9 @@
 package config
 
 import (
+	"encoding/json" // Importing the JSON package for marshaling/unmarshaling
 	"fmt"
 	"os"
-	"encoding/json" // Importing the JSON package for marshaling/unmarshaling
 	"path/filepath"
 	"strings"
 
@@ -13,33 +13,33 @@ import (
 
 // Config represents the combined framework and service configurations.
 type Config struct {
-	Framework         FrameworkConfig       `mapstructure:"framework"`
+	Framework         FrameworkConfig        `mapstructure:"framework"`
 	Service           map[string]interface{} `mapstructure:"service"` // Holds service-specific configs
-	ComplianceEnabled bool                  `mapstructure:"compliance_enabled"`
-	AppName           string                `mapstructure:"app_name"`
-	Env               string                `mapstructure:"env"`
-	PCIEnabled        bool                  `mapstructure:"pci_enabled"`
-	EncryptionKey     string                `mapstructure:"encryption_key"`
+	ComplianceEnabled bool                   `mapstructure:"compliance_enabled"`
+	AppName           string                 `mapstructure:"app_name"`
+	Env               string                 `mapstructure:"env"`
+	PCIEnabled        bool                   `mapstructure:"pci_enabled"`
+	EncryptionKey     string                 `mapstructure:"encryption_key"`
 }
 
 // FrameworkConfig contains settings for the core framework.
 type FrameworkConfig struct {
-	ServiceName       string              `mapstructure:"service_name"`
-	Version           string              `mapstructure:"version"`
-	RPC               RPCConfig           `mapstructure:"rpc"`
-	Transport         TransportConfig     `mapstructure:"transport"`
-	Logging           LoggingConfig       `mapstructure:"logging"`
-	Observability     ObservabilityConfig `mapstructure:"observability"`
-	Security          SecurityConfig      `mapstructure:"security"`
-	Storage           StorageConfig       `mapstructure:"storage"`
-	EnableDynamicReload bool              `mapstructure:"enable_dynamic_reload"`
+	ServiceName         string              `mapstructure:"service_name"`
+	Version             string              `mapstructure:"version"`
+	RPC                 RPCConfig           `mapstructure:"rpc"`
+	Transport           TransportConfig     `mapstructure:"transport"`
+	Logging             LoggingConfig       `mapstructure:"logging"`
+	Observability       ObservabilityConfig `mapstructure:"observability"`
+	Security            SecurityConfig      `mapstructure:"security"`
+	Storage             StorageConfig       `mapstructure:"storage"`
+	EnableDynamicReload bool                `mapstructure:"enable_dynamic_reload"`
 }
 
 // RPCConfig contains settings for handling RPC responses.
 type RPCConfig struct {
 	ResponseStreamType string `mapstructure:"response_stream_type"` // "single" or "dedicated"
-	MaxRetries         int    `mapstructure:"max_retries"`           // Retry failed RPC calls
-	TimeoutMs          int    `mapstructure:"timeout_ms"`            // Default timeout for RPC calls
+	MaxRetries         int    `mapstructure:"max_retries"`          // Retry failed RPC calls
+	TimeoutMs          int    `mapstructure:"timeout_ms"`           // Default timeout for RPC calls
 }
 
 // TransportConfig contains messaging transport settings.
@@ -66,13 +66,13 @@ type LoggingConfig struct {
 
 // ObservabilityConfig contains observability settings.
 type ObservabilityConfig struct {
-	TracingEnabled   bool   `mapstructure:"tracing_enabled"` // OpenTelemetry support
-	OpentracingHost  string `mapstructure:"opentracing_host"`
-	OpentracingPort  int    `mapstructure:"opentracing_port"`
-	MetricsAdapter   string `mapstructure:"metrics_adapter"`
-	MetricsHost      string `mapstructure:"metrics_host"`
-	MetricsPort      int    `mapstructure:"metrics_port"`
-	LogLevelMetrics  bool   `mapstructure:"log_level_metrics"` // Toggle log-based metrics
+	TracingEnabled  bool   `mapstructure:"tracing_enabled"` // OpenTelemetry support
+	OpentracingHost string `mapstructure:"opentracing_host"`
+	OpentracingPort int    `mapstructure:"opentracing_port"`
+	MetricsAdapter  string `mapstructure:"metrics_adapter"`
+	MetricsHost     string `mapstructure:"metrics_host"`
+	MetricsPort     int    `mapstructure:"metrics_port"`
+	LogLevelMetrics bool   `mapstructure:"log_level_metrics"` // Toggle log-based metrics
 }
 
 // SecurityConfig contains security-related settings.
@@ -90,17 +90,17 @@ type StorageConfig struct {
 
 // ServiceConfig defines service-specific configurations.
 type ServiceConfig struct {
-	Port        int    `json:"port" mapstructure:"port"`             // Port for the service
+	Port        int    `json:"port" mapstructure:"port"`               // Port for the service
 	Environment string `json:"environment" mapstructure:"environment"` // Environment: development, staging, production
-	DebugMode   bool   `json:"debug_mode" mapstructure:"debug_mode"`  // Enable or disable debug mode
+	DebugMode   bool   `json:"debug_mode" mapstructure:"debug_mode"`   // Enable or disable debug mode
 }
 
 // DefaultServiceConfig returns default values for service-specific configurations.
 func DefaultServiceConfig() *ServiceConfig {
 	return &ServiceConfig{
-		Port:        8080,            // Default port
-		Environment: "development",  // Default environment
-		DebugMode:   true,           // Debug mode enabled by default
+		Port:        8080,          // Default port
+		Environment: "development", // Default environment
+		DebugMode:   true,          // Debug mode enabled by default
 	}
 }
 
@@ -168,12 +168,12 @@ func LoadConfig() (*Config, error) {
 	}
 
 	if !merged {
-    absPath, err := filepath.Abs(configDir)
-    if err != nil {
-        absPath = configDir
-    }
-    fmt.Printf("⚠️ No environment-specific (%s) config files found, using defaults + env vars from %s\n", environment, absPath)
-  }
+		absPath, err := filepath.Abs(configDir)
+		if err != nil {
+			absPath = configDir
+		}
+		fmt.Printf("⚠️ No environment-specific (%s) config files found, using defaults + env vars from %s\n", environment, absPath)
+	}
 
 	var config Config
 	if err := mainViper.Unmarshal(&config); err != nil {
@@ -229,8 +229,8 @@ func (c *Config) Validate() error {
 
 // setDefaults initializes default values for framework configuration.
 func setDefaults(v *viper.Viper) {
-  v.SetDefault("app_name", "example")
-  v.SetDefault("encryption_key", "Defaultfff")
+	v.SetDefault("app_name", "example")
+	v.SetDefault("encryption_key", "Defaultfff")
 	v.SetDefault("framework.service_name", "example-service")
 	v.SetDefault("framework.version", "1.0.0")
 	v.SetDefault("framework.rpc.response_stream_type", "dedicated")
@@ -262,5 +262,5 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.security.enable_rbac", true)
 	v.SetDefault("framework.security.tls_strict", false)
 	v.SetDefault("framework.enable_dynamic_reload", false) // Dynamic reload disabled by default
-  v.SetDefault("framework.storage.type", "inmemory")
+	v.SetDefault("framework.storage.type", "inmemory")
 }

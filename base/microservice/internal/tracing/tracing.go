@@ -9,9 +9,9 @@ import (
 	"github.com/caaspay/caaspay-core/internal/config"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/semconv/v1.4.0"
 	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
@@ -86,7 +86,7 @@ func setupDatadog(serviceName string, cfg *config.ObservabilityConfig) (*sdktrac
 		tracer.WithService(serviceName),
 		tracer.WithEnv("production"),
 	)
-	
+
 	// Create a no-op tracer provider for DataDog since it uses its own tracer
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(resource.NewWithAttributes(

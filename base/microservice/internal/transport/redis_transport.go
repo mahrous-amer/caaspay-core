@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/caaspay/caaspay-core/internal/logging"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"github.com/caaspay/caaspay-core/internal/logging"
 )
 
 // RedisTransport implements the Transport interface using Redis Streams.

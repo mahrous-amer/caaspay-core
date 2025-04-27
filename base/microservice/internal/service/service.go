@@ -41,7 +41,7 @@ type ServiceStruct struct {
 	frameworkCtx    *framework.FrameworkContext
 	serviceInstance interface{}
 	shutdownCh      chan struct{}
-	doneCh      chan struct{}
+	doneCh          chan struct{}
 	wg              sync.WaitGroup
 }
 
@@ -55,7 +55,7 @@ func NewServiceStruct(fwCtx *framework.FrameworkContext, serviceInstance interfa
 		frameworkCtx:    fwCtx,
 		serviceInstance: serviceInstance,
 		shutdownCh:      make(chan struct{}),
-		doneCh:      make(chan struct{}),
+		doneCh:          make(chan struct{}),
 	}
 
 	return service, nil
