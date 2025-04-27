@@ -118,9 +118,8 @@ func (s *ServiceStruct) registerRPCMethod(methodName string, config map[string]s
 }
 
 // Run starts the service and its lifecycle.
-// Run starts the service and its lifecycle.
 func (s *ServiceStruct) Run() {
-	defer close(s.doneCh) // 🛑 Critical: close doneCh when Run finishes
+	defer close(s.doneCh)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -131,7 +130,28 @@ func (s *ServiceStruct) Run() {
 
 	s.AutoRegisterFunctions(s.serviceInstance)
 
-	// Wait until shutdown signal is received
+	// Step 1️⃣: Call developer's Start()
+	if svc, ok := s.serviceInstance.(Service); ok {
+		if err := svc.Start(ctx); err != nil {
+			s.frameworkCtx.Logger.Error(ctx, "❌ Service Start failed", map[string]interface{}{
+				"error": err.Error(),
+			})
+			return
+		}
+	}
+
+	// Step 2️⃣: Immediately call HealthCheck()
+	if svc, ok := s.serviceInstance.(Service); ok {
+		if err := svc.HealthCheck(ctx); err != nil {
+			s.frameworkCtx.Logger.Error(ctx, "❌ HealthCheck failed", map[string]interface{}{
+				"error": err.Error(),
+			})
+			// Optionally shutdown early
+			return
+		}
+	}
+
+	// 3️⃣: Now wait for shutdown
 	<-s.shutdownCh
 	cancel()
 
@@ -139,18 +159,28 @@ func (s *ServiceStruct) Run() {
 		"name": s.frameworkCtx.ServiceName,
 	})
 
-	// Start a background goroutine to wait for all workers
+	// Step 4️⃣: Call Stop()
+	if svc, ok := s.serviceInstance.(Service); ok {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer stopCancel()
+		if err := svc.Stop(stopCtx); err != nil {
+			s.frameworkCtx.Logger.Error(ctx, "❌ Service Stop failed", map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
+	}
+
+	// Wait for all background workers
 	waitDone := make(chan struct{})
 	go func() {
 		defer close(waitDone)
 		s.wg.Wait()
 	}()
 
-	// Wait for either all workers done or timeout
 	select {
 	case <-waitDone:
 		s.frameworkCtx.Logger.Info(ctx, "✅ Shutdown complete", nil)
-	case <-time.After(20 * time.Second): // fallback timeout
+	case <-time.After(20 * time.Second):
 		s.frameworkCtx.Logger.Error(ctx, "❌ Shutdown timed out", nil)
 	}
 }

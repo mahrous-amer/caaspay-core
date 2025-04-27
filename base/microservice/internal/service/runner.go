@@ -58,7 +58,7 @@ func RunFrameworkService(devService Service) {
 			defer shutdownCancel()
 
 			select {
-			case <-serviceStruct.doneCh: // 💥 wait for real shutdown
+			case <-serviceStruct.Done(): // 💥 wait for real shutdown
 				fwContext.Logger.Info(ctx, "✅ Service shutdown complete", nil)
 			case <-shutdownCtx.Done():
 				fwContext.Logger.Error(ctx, "❌ Shutdown timeout. Forcing exit.", nil)
