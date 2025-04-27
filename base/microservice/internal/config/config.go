@@ -172,7 +172,7 @@ func LoadConfig() (*Config, error) {
     if err != nil {
         absPath = configDir
     }
-    fmt.Printf("⚠️ No environment-specific config files found, using defaults + env vars from %s\n", absPath)
+    fmt.Printf("⚠️ No environment-specific (%s) config files found, using defaults + env vars from %s\n", environment, absPath)
   }
 
 	var config Config
