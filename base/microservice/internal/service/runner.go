@@ -47,7 +47,7 @@ func RunFrameworkService(devService Service) {
 		}()
 
 		// 🧠 Start internal health checker ONLY if config says so
-		if fwContext.Config.Framework.Health.InternalHealthChecker {
+		if fwContext.Config.Framework.HealthCheck.InternalHealthChecker {
 			go startInternalHealthCheck(fwContext, serviceStruct, devService)
 		}
 
@@ -107,7 +107,7 @@ func startInternalHealthCheck(fwContext *framework.FrameworkContext, serviceStru
 				return
 			}
 
-			serviceStruct.Lifecycle.MarkReady()
+			serviceStruct.lifecycle.MarkReady()
 
 		case <-serviceStruct.Done():
 			return

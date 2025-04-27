@@ -43,7 +43,8 @@ type ServiceStruct struct {
 	shutdownCh      chan struct{}
 	doneCh          chan struct{}
 	wg              sync.WaitGroup
-	Lifecycle       *ServiceLifecycle
+	healthServer    *HealthServer
+	lifecycle       *ServiceLifecycle
 }
 
 // NewServiceStruct initializes a new service instance with FrameworkContext.
@@ -57,7 +58,7 @@ func NewServiceStruct(fwCtx *framework.FrameworkContext, serviceInstance interfa
 		serviceInstance: serviceInstance,
 		shutdownCh:      make(chan struct{}),
 		doneCh:          make(chan struct{}),
-		Lifecycle:       NewServiceLifecycle(),
+		lifecycle:       NewServiceLifecycle(),
 	}
 
 	return service, nil
@@ -132,6 +133,15 @@ func (s *ServiceStruct) Run() {
 
 	s.AutoRegisterFunctions(s.serviceInstance)
 
+	// Phase 1: Mark as started
+	s.lifecycle.MarkStarted()
+
+	// If HTTP health server is enabled, start it
+	if s.frameworkCtx.Config.Framework.HealthCheck.HTTPServerEnabled {
+		s.healthServer = NewHealthServer(s)
+		s.healthServer.Start()
+	}
+
 	// Step 1️⃣: Call developer's Start()
 	if svc, ok := s.serviceInstance.(Service); ok {
 		if err := svc.Start(ctx); err != nil {
@@ -152,6 +162,10 @@ func (s *ServiceStruct) Run() {
 			return
 		}
 	}
+
+	// Phase 3: Mark ready
+	s.lifecycle.MarkReady()
+	s.frameworkCtx.Logger.Info(ctx, "✅ Service marked as ready", nil)
 
 	// 3️⃣: Now wait for shutdown
 	<-s.shutdownCh
@@ -189,6 +203,11 @@ func (s *ServiceStruct) Run() {
 
 // Shutdown gracefully signals the service to stop.
 func (s *ServiceStruct) Shutdown() {
+	// Shutdown health server if running
+	if s.healthServer != nil {
+		s.healthServer.Stop()
+	}
+	s.lifecycle.MarkShutdown()
 	select {
 	case <-s.shutdownCh:
 		// already closed

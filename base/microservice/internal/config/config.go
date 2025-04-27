@@ -29,7 +29,7 @@ type FrameworkConfig struct {
 	RPC                 RPCConfig           `mapstructure:"rpc"`
 	Transport           TransportConfig     `mapstructure:"transport"`
 	Logging             LoggingConfig       `mapstructure:"logging"`
-	Health              HealthConfig        `mapstructure:"health"`
+	HealthCheck         HealthConfig        `mapstructure:"health_check"`
 	Observability       ObservabilityConfig `mapstructure:"observability"`
 	Security            SecurityConfig      `mapstructure:"security"`
 	Storage             StorageConfig       `mapstructure:"storage"`
@@ -67,7 +67,12 @@ type LoggingConfig struct {
 
 // HealthConfig contains health and monitor related settings.
 type HealthConfig struct {
-	InternalHealthChecker bool `mapstructure:"internal_health_checker"`
+	InternalHealthChecker bool   `mapstructure:"internal_health_checker"`  // If true, start internal goroutine health checker
+	HTTPServerEnabled     bool   `mapstructure:"http_server_enabled"`      // If true, run HTTP server for health endpoints
+	HTTPServerPort        int    `mapstructure:"http_server_port"`         // Which port to serve on (e.g., 8080)
+	HTTPServerHealthRoute string `mapstructure:"http_server_health_route"` // e.g., /healthz
+	HTTPServerReadyRoute  string `mapstructure:"http_server_ready_route"`  // e.g., /readyz
+	HTTPServerLiveRoute   string `mapstructure:"http_server_live_route"`   // e.g., /livez
 }
 
 // ObservabilityConfig contains observability settings.
@@ -256,6 +261,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.logging.format", "json")
 	v.SetDefault("framework.logging.redact_sensitive", true)
 	v.SetDefault("framework.health.internal_health_checker", true)
+	v.SetDefault("framework.health.http_server_enabled", true)
+	v.SetDefault("framework.health.http_server_port", 8080)
+	v.SetDefault("framework.health.http_server_health_route", "/healthz")
+	v.SetDefault("framework.health.http_server_ready_route", "/readyz")
+	v.SetDefault("framework.health.http_server_live_route", "/livez")
 	v.SetDefault("framework.logging.debug_enabled", false)
 	v.SetDefault("framework.observability.tracing_enabled", true)
 	v.SetDefault("framework.observability.opentracing_host", "localhost")
