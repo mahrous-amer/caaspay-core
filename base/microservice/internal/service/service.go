@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
 	"reflect"
 	"sync"
 	"time"
@@ -42,6 +41,7 @@ type ServiceStruct struct {
 	frameworkCtx    *framework.FrameworkContext
 	serviceInstance interface{}
 	shutdownCh      chan struct{}
+	doneCh      chan struct{}
 	wg              sync.WaitGroup
 }
 
@@ -55,10 +55,7 @@ func NewServiceStruct(fwCtx *framework.FrameworkContext, serviceInstance interfa
 		frameworkCtx:    fwCtx,
 		serviceInstance: serviceInstance,
 		shutdownCh:      make(chan struct{}),
-	}
-
-	if err := service.registerRPCMethods(); err != nil {
-		return nil, fmt.Errorf("failed to register RPC methods: %w", err)
+		doneCh:      make(chan struct{}),
 	}
 
 	return service, nil
@@ -121,7 +118,10 @@ func (s *ServiceStruct) registerRPCMethod(methodName string, config map[string]s
 }
 
 // Run starts the service and its lifecycle.
-func (s *ServiceStruct) Run(serviceInstance interface{}) {
+// Run starts the service and its lifecycle.
+func (s *ServiceStruct) Run() {
+	defer close(s.doneCh) // 🛑 Critical: close doneCh when Run finishes
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -129,8 +129,9 @@ func (s *ServiceStruct) Run(serviceInstance interface{}) {
 		"name": s.frameworkCtx.ServiceName,
 	})
 
-	s.AutoRegisterFunctions(serviceInstance)
+	s.AutoRegisterFunctions(s.serviceInstance)
 
+	// Wait until shutdown signal is received
 	<-s.shutdownCh
 	cancel()
 
@@ -138,22 +139,20 @@ func (s *ServiceStruct) Run(serviceInstance interface{}) {
 		"name": s.frameworkCtx.ServiceName,
 	})
 
-	done := make(chan struct{})
+	// Start a background goroutine to wait for all workers
+	waitDone := make(chan struct{})
 	go func() {
-		defer close(done)
+		defer close(waitDone)
 		s.wg.Wait()
 	}()
 
+	// Wait for either all workers done or timeout
 	select {
-	case <-done:
+	case <-waitDone:
 		s.frameworkCtx.Logger.Info(ctx, "✅ Shutdown complete", nil)
-	case <-time.After(10 * time.Second):
-		s.frameworkCtx.Logger.Error(ctx, "❌ Shutdown timed out. Forcing exit", nil)
-		os.Exit(1) // <<<< 🛑 Force kill the process here
+	case <-time.After(20 * time.Second): // fallback timeout
+		s.frameworkCtx.Logger.Error(ctx, "❌ Shutdown timed out", nil)
 	}
-
-	// Optional: even clean exit after shutdown complete
-	os.Exit(0)
 }
 
 // Shutdown gracefully signals the service to stop.
@@ -166,7 +165,11 @@ func (s *ServiceStruct) Shutdown() {
 	}
 }
 
-// AutoRegisterFunctions auto-registers eligible framework methods.
+func (s *ServiceStruct) Done() <-chan struct{} {
+	return s.doneCh
+}
+
+// AutoRegisterFunctions auto-registers eligible framework methods based on naming conventions.
 func (s *ServiceStruct) AutoRegisterFunctions(serviceInstance interface{}) {
 	svcType := reflect.TypeOf(serviceInstance)
 	svcValue := reflect.ValueOf(serviceInstance)
@@ -174,19 +177,45 @@ func (s *ServiceStruct) AutoRegisterFunctions(serviceInstance interface{}) {
 	for i := 0; i < svcType.NumMethod(); i++ {
 		method := svcType.Method(i)
 		methodValue := svcValue.Method(i)
-		streamName := method.Name
+		methodName := method.Name
 
 		switch {
-		case method.Type.NumIn() == 3 && method.Type.In(1).String() == "context.Context" && method.Type.In(2).String() == "[]byte":
-			s.registerRPCMethod(streamName, map[string]string{"stream": streamName})
+		case method.Type.NumIn() == 3 &&
+			method.Type.In(1).String() == "context.Context" &&
+			method.Type.In(2).String() == "[]byte" &&
+			hasPrefix(methodName, "RPC_"):
 
-		case method.Type.NumIn() == 2 && method.Type.In(1).String() == "context.Context":
-			s.registerEmitterPull(streamName, 10*time.Second, methodValue)
+			stream := trimPrefix(methodName, "RPC_")
+			s.registerRPCMethod(stream, map[string]string{"stream": stream})
 
-		case method.Type.NumIn() == 3 && method.Type.In(1).String() == "context.Context" && method.Type.In(2).String() == "[][]byte":
-			s.registerReceiver(streamName, 10, methodValue)
+		case method.Type.NumIn() == 2 &&
+			method.Type.In(1).String() == "context.Context" &&
+			hasPrefix(methodName, "Emitter_"):
+
+			stream := trimPrefix(methodName, "Emitter_")
+			s.registerEmitterPull(stream, 10*time.Second, methodValue)
+
+		case method.Type.NumIn() == 3 &&
+			method.Type.In(1).String() == "context.Context" &&
+			method.Type.In(2).String() == "[][]byte" &&
+			hasPrefix(methodName, "Receiver_"):
+
+			stream := trimPrefix(methodName, "Receiver_")
+			s.registerReceiver(stream, 10, methodValue)
 		}
 	}
+}
+
+// Helper functions for string prefix matching
+func hasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+func trimPrefix(s, prefix string) string {
+	if hasPrefix(s, prefix) {
+		return s[len(prefix):]
+	}
+	return s
 }
 
 // registerEmitterPull registers a method to be called periodically.

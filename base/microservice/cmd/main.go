@@ -51,14 +51,12 @@ func runService(serviceStruct *service.ServiceStruct, fwContext *framework.Frame
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Channel to capture OS signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start the service in a separate goroutine
 	go func() {
 		fwContext.Logger.Info(ctx, "🚀 Service is starting...", nil)
-		serviceStruct.Run(serviceStruct)
+		serviceStruct.Run()
 	}()
 
 	// Wait for a shutdown signal
@@ -67,22 +65,20 @@ func runService(serviceStruct *service.ServiceStruct, fwContext *framework.Frame
 		"signal": sig.String(),
 	})
 
-	// Create a shutdown context with a timeout
-	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer shutdownCancel()
-
-	// Gracefully shut down the service
-	fwContext.Logger.Info(ctx, "🛑 Shutting down service...", nil)
+	fwContext.Logger.Info(ctx, "🛑 Initiating graceful shutdown...", nil)
 	serviceStruct.Shutdown()
 
-	// Wait for all goroutines to complete or timeout
+	// Set timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
 	select {
+	case <-serviceStruct.Done(): // 🆕 Wait until Run() finishes
+		fwContext.Logger.Info(ctx, "✅ Service stopped gracefully", nil)
 	case <-shutdownCtx.Done():
-		if shutdownCtx.Err() == context.DeadlineExceeded {
-			fwContext.Logger.Error(ctx, "❌ Shutdown timed out. Forcing exit.", nil)
-		}
+		fwContext.Logger.Error(ctx, "❌ Shutdown timed out. Forcing exit.", nil)
 		os.Exit(1)
 	}
 
-	fwContext.Logger.Info(ctx, "✅ Service stopped gracefully", nil)
+	os.Exit(0)
 }
