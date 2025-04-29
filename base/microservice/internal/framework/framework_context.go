@@ -1,6 +1,7 @@
 package framework
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -73,6 +74,11 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		serviceConfig = config.DefaultServiceConfig()
 	}
 
+	// Setup heartbeat if its enabled
+	if cfg.Framework.HealthCheck.HeartbeatEnabled {
+		go startHeartbeat(logger, cfg.Framework.HealthCheck.HeartbeatInterval)
+	}
+
 	return &FrameworkContext{
 		Config:        cfg,
 		Logger:        logger,
@@ -83,4 +89,16 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		ServiceName:   cfg.Framework.ServiceName,
 		ServiceConfig: serviceConfig,
 	}, nil
+}
+
+func startHeartbeat(logger *logging.Logger, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			logger.Info(context.Background(), "💓 Framework heartbeat...", nil)
+		}
+	}
 }

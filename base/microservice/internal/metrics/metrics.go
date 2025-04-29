@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/config"
@@ -73,16 +72,7 @@ func setupPrometheus(cfg *config.ObservabilityConfig) error {
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	otel.SetMeterProvider(provider)
 
-	log.Printf("📡 Prometheus metrics enabled on port %d\n", cfg.MetricsPort)
-	go func() {
-		http.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			provider.Shutdown(context.Background())
-			w.WriteHeader(http.StatusOK)
-		}))
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.MetricsPort), nil); err != nil {
-			log.Fatalf("❌ Failed to start Prometheus endpoint: %v", err)
-		}
-	}()
+	// Prometheus server is handled in service/health_server.go if needed.
 
 	return nil
 }

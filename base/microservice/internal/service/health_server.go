@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// HealthServer serves health, readiness, and liveness endpoints.
+// HealthServer serves health, readiness, liveness, and optional metrics endpoints.
 type HealthServer struct {
 	service *ServiceStruct
 	server  *http.Server
@@ -30,6 +32,11 @@ func NewHealthServer(service *ServiceStruct) *HealthServer {
 	mux.HandleFunc(cfg.HTTPServerHealthRoute, healthServer.handleHealthz)
 	mux.HandleFunc(cfg.HTTPServerReadyRoute, healthServer.handleReadyz)
 	mux.HandleFunc(cfg.HTTPServerLiveRoute, healthServer.handleLivez)
+
+	// Optional: expose /metrics endpoint if enabled
+	if cfg.ExposeMetricsEndpoint {
+		mux.Handle(cfg.MetricsRoute, promhttp.Handler())
+	}
 
 	return healthServer
 }
@@ -62,7 +69,7 @@ func (h *HealthServer) Stop() {
 	}
 }
 
-// handleHealthz returns 200 if service is started, ready, and not shutdown.
+// handleHealthz returns 200 if service is started and not shutting down.
 func (h *HealthServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if !h.service.lifecycle.IsStarted() || h.service.lifecycle.IsShutdown() {
 		http.Error(w, "Service not healthy", http.StatusServiceUnavailable)
