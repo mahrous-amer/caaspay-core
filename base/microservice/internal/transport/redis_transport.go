@@ -16,15 +16,13 @@ type RedisTransport struct {
 	useCompression     bool
 	useEncryption      bool
 	serviceReplyStream string
-	encryptionKey      []byte
+	encryptionKey []byte
 
 	maxRetries int
 	retryDelay time.Duration
 	dlqStream  string
 
-	// Dependencies injected from the framework.
 	logger *logging.Logger
-	// Optional: metrics and compliance can be added here if needed.
 }
 
 // RedisTransportConfig defines the configuration for RedisTransport.
@@ -34,16 +32,18 @@ type RedisTransportConfig struct {
 	UseEncryption      bool
 	ServiceReplyStream string
 	EncryptionKey      string
-	MaxRetries         int           // e.g. 3
-	RetryDelay         time.Duration // e.g. 500 * time.Millisecond
-	DLQStream          string        // e.g. "dlq:<service_reply>"
+	MaxRetries         int
+	RetryDelay         time.Duration
+	DLQStream          string
 }
 
 // NewRedisTransport initializes a RedisTransport with the provided configuration and logger.
 func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisTransport {
 	client := redis.NewClient(&redis.Options{
 		Addr: cfg.RedisAddr,
+		// Enterprise: can configure poolSize, minIdleConns, etc., from cfg.
 	})
+
 	maxRetries := cfg.MaxRetries
 	if maxRetries <= 0 {
 		maxRetries = 3
@@ -57,7 +57,7 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 		dlqStream = "dlq:" + cfg.ServiceReplyStream
 	}
 
-	return &RedisTransport{
+	rt := &RedisTransport{
 		client:             client,
 		useCompression:     cfg.UseCompression,
 		useEncryption:      cfg.UseEncryption,
@@ -68,6 +68,26 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 		dlqStream:          dlqStream,
 		logger:             logger,
 	}
+
+	if err := rt.verifyConnection(); err != nil {
+		logger.Error(context.Background(), "RedisTransport connection verification failed", map[string]interface{}{"error": err.Error()})
+	}
+
+	return rt
+}
+
+// IsHealthy returns true if Redis PING succeeds.
+func (r *RedisTransport) IsHealthy() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return r.client.Ping(ctx).Err() == nil
+}
+
+// verifyConnection checks broker reachability.
+func (r *RedisTransport) verifyConnection() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return r.client.Ping(ctx).Err()
 }
 
 // Request sends an RPC request and waits for a response.
@@ -114,7 +134,6 @@ func (r *RedisTransport) Request(ctx context.Context, stream string, data []byte
 	}
 }
 
-// listenForReply listens for a reply message on the reply stream.
 func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string, responseCh chan<- []byte) {
 	for {
 		select {
@@ -152,7 +171,6 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 	}
 }
 
-// Publish sends a message without waiting for a response.
 func (r *RedisTransport) Publish(ctx context.Context, stream string, data []byte) error {
 	encodedData, err := r.prepareData(data)
 	if err != nil {
@@ -182,20 +200,18 @@ func (r *RedisTransport) Publish(ctx context.Context, stream string, data []byte
 	return nil
 }
 
-// Subscribe listens to a Redis stream and processes messages with the given handler.
 func (r *RedisTransport) Subscribe(stream string, handler HandlerFunc) error {
 	ctx := context.Background()
 	group := "consumer_group"
 	consumer := uuid.New().String()
 
-	// Create consumer group if it does not exist.
-	if err := r.client.XGroupCreateMkStream(ctx, stream, group, "$").Err(); err != nil {
+	if err := r.client.XGroupCreateMkStream(ctx, stream, group, "$" ).Err(); err != nil {
 		if err.Error() != "BUSYGROUP Consumer Group name already exists" {
 			r.logger.Error(ctx, "Error creating consumer group", map[string]interface{}{"error": err.Error()})
 		}
 	}
 
-	r.logger.Info(context.Background(), "Subscribing to stream", map[string]interface{}{
+	r.logger.Info(ctx, "Subscribing to stream", map[string]interface{}{
 		"stream": stream,
 	})
 
@@ -250,12 +266,10 @@ func (r *RedisTransport) Subscribe(stream string, handler HandlerFunc) error {
 	}
 }
 
-// Close shuts down the Redis client connection.
 func (r *RedisTransport) Close() error {
 	return r.client.Close()
 }
 
-// prepareData applies compression then encryption if enabled.
 func (r *RedisTransport) prepareData(data []byte) ([]byte, error) {
 	var err error
 	if r.useCompression {
@@ -273,7 +287,6 @@ func (r *RedisTransport) prepareData(data []byte) ([]byte, error) {
 	return data, nil
 }
 
-// processData applies decryption then decompression if enabled.
 func (r *RedisTransport) processData(data []byte) ([]byte, error) {
 	var err error
 	if r.useEncryption {
@@ -290,3 +303,4 @@ func (r *RedisTransport) processData(data []byte) ([]byte, error) {
 	}
 	return data, nil
 }
+
