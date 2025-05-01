@@ -3,6 +3,8 @@ package transport
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,19 +12,20 @@ import (
 
 // TransportMessage is the core message structure for all Redis-based communications.
 type TransportMessage struct {
-	MessageID    string            `json:"message_id"`
-	TransportID  string            `json:"transport_id"`
-	Service      string            `json:"service"`
-	Method       string            `json:"method"`
-	ReplyTo      string            `json:"reply_to,omitempty"`
-	Deadline     int64             `json:"deadline"`
-	Auth         *AuthContext      `json:"auth,omitempty"`
-	Context      *RequestContext   `json:"context,omitempty"`
-	Args         map[string]any    `json:"args,omitempty"`
-	Response     map[string]any    `json:"response,omitempty"`
-	Stash        map[string]any    `json:"stash,omitempty"`
-	Trace        map[string]string `json:"trace,omitempty"`
-	Error        *MessageError     `json:"error,omitempty"`
+	MessageID   string            `json:"message_id"`
+	TransportID string            `json:"transport_id"`
+	Service     string            `json:"service"`
+	Method      string            `json:"method"`
+	Who         string            `json:"who,omitempty"`
+	ReplyTo     string            `json:"reply_to,omitempty"`
+	Deadline    int64             `json:"deadline"`
+	Auth        *AuthContext      `json:"auth,omitempty"`
+	Context     *RequestContext   `json:"context,omitempty"`
+	Args        json.RawMessage   `json:"args,omitempty"`
+	Response    json.RawMessage   `json:"response,omitempty"`
+	Stash       map[string]any    `json:"stash,omitempty"`
+	Trace       map[string]string `json:"trace,omitempty"`
+	Error       *MessageError     `json:"error,omitempty"`
 }
 
 // AuthContext holds authentication metadata.
@@ -49,17 +52,16 @@ type MessageError struct {
 }
 
 // NewTransportMessage creates a new message with defaults.
-func NewTransportMessage(service, method string) *TransportMessage {
+func NewTransportMessage(service, method string, rawArgs json.RawMessage) *TransportMessage {
 	return &TransportMessage{
 		MessageID:   uuid.NewString(),
 		TransportID: uuid.NewString(),
 		Service:     service,
 		Method:      method,
 		Deadline:    time.Now().Add(30 * time.Second).Unix(),
-		Args:        make(map[string]any{}),
-		Response:    make(map[string]any{}),
-		Stash:       make(map[string]any{}),
-		Trace:       make(map[string]string{}),
+		Args:        rawArgs,
+		Stash:       map[string]any{},
+		Trace:       map[string]string{},
 	}
 }
 

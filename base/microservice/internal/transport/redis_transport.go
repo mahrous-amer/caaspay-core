@@ -16,7 +16,7 @@ type RedisTransport struct {
 	useCompression     bool
 	useEncryption      bool
 	serviceReplyStream string
-	encryptionKey []byte
+	encryptionKey      []byte
 
 	maxRetries int
 	retryDelay time.Duration
@@ -205,7 +205,7 @@ func (r *RedisTransport) Subscribe(stream string, handler HandlerFunc) error {
 	group := "consumer_group"
 	consumer := uuid.New().String()
 
-	if err := r.client.XGroupCreateMkStream(ctx, stream, group, "$" ).Err(); err != nil {
+	if err := r.client.XGroupCreateMkStream(ctx, stream, group, "$").Err(); err != nil {
 		if err.Error() != "BUSYGROUP Consumer Group name already exists" {
 			r.logger.Error(ctx, "Error creating consumer group", map[string]interface{}{"error": err.Error()})
 		}
@@ -303,4 +303,3 @@ func (r *RedisTransport) processData(data []byte) ([]byte, error) {
 	}
 	return data, nil
 }
-

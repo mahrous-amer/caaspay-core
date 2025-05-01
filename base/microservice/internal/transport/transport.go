@@ -25,4 +25,3 @@ type Transport interface {
 
 // HandlerFunc defines a callback for processing incoming messages.
 type HandlerFunc func(ctx context.Context, request []byte) ([]byte, error)
-
