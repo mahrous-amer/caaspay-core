@@ -45,7 +45,7 @@ type RedisTransportConfig struct {
 	WriteTimeout       time.Duration // Timeout for socket writes
 }
 
-func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisTransport {
+func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) (*RedisTransport, error) {
 	var client redis.Cmdable
 
 	// Default timeouts
@@ -60,6 +60,14 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 	writeTimeout := cfg.WriteTimeout
 	if writeTimeout == 0 {
 		writeTimeout = 3 * time.Second
+	}
+	maxRetries := cfg.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+	retryDelay := cfg.RetryDelay
+	if retryDelay <= 0 {
+		retryDelay = 1000 * time.Millisecond
 	}
 
 	// TLS handling
@@ -95,16 +103,6 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 		})
 	}
 
-	// Retry configuration
-	maxRetries := cfg.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 3
-	}
-	retryDelay := cfg.RetryDelay
-	if retryDelay <= 0 {
-		retryDelay = 500 * time.Millisecond
-	}
-
 	// Dead Letter Queue fallback
 	dlqStream := cfg.DLQStream
 	if dlqStream == "" {
@@ -124,9 +122,23 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 	}
 
 	// Check connection once at startup
-	if err := rt.verifyConnection(); err != nil {
-		logger.Error(context.Background(), "❌ RedisTransport connection verification failed", map[string]interface{}{"error": err.Error()})
-	} else {
+	// Retry connection verification with backoff
+	var trials int
+	for {
+		trials++
+		if err := rt.verifyConnection(); err != nil {
+			logger.Error(context.Background(), "⏳ RedisTransport connection failed, retrying...", map[string]interface{}{
+				"error": err.Error(),
+			})
+			if trials >= maxRetries {
+
+				logger.Error(context.Background(), "❌ RedisTransport connection verification failed", map[string]interface{}{"error": err.Error()})
+				return nil, fmt.Errorf("failed to connect to Redis: %w", err)
+			}
+			time.Sleep(rt.retryDelay * time.Duration(trials))
+			continue
+		}
+
 		logger.Info(context.Background(), "✅ RedisTransport connected successfully", map[string]interface{}{
 			"cluster":     cfg.UseCluster,
 			"pool_size":   cfg.PoolSize,
@@ -134,9 +146,9 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 			"compression": cfg.UseCompression,
 			"encryption":  cfg.UseEncryption,
 		})
+		break
 	}
-
-	return rt
+	return rt, nil
 }
 
 func (r *RedisTransport) Close() error {

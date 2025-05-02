@@ -51,7 +51,10 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		MaxRetries:         3,
 		RetryDelay:         500 * time.Millisecond,
 	}
-	redisTransport := transport.NewRedisTransport(redisCfg, logger)
+	redisTransport, err := transport.NewRedisTransport(redisCfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize transport: %w", err)
+	}
 
 	// Initialize storage
 	store, err := storage.NewStore(cfg.Framework.Storage)
