@@ -14,7 +14,6 @@ import (
 // RedisTransport implements the Transport interface using Redis Streams.
 type RedisTransport struct {
 	client             redis.Cmdable
-	rawClient          interface{}
 	useCompression     bool
 	useEncryption      bool
 	serviceReplyStream string
@@ -47,8 +46,7 @@ type RedisTransportConfig struct {
 }
 
 func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisTransport {
-	var cmdable redis.Cmdable
-	var rawClient interface{}
+	var client redis.Cmdable
 
 	// Default timeouts
 	dialTimeout := cfg.DialTimeout
@@ -72,7 +70,7 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 
 	// Redis client setup
 	if cfg.UseCluster {
-		cluster := redis.NewClusterClient(&redis.ClusterOptions{
+		client = redis.NewClusterClient(&redis.ClusterOptions{
 			Addrs:        cfg.RedisAddr,
 			TLSConfig:    tlsConfig,
 			PoolSize:     cfg.PoolSize,
@@ -81,14 +79,12 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 			ReadTimeout:  readTimeout,
 			WriteTimeout: writeTimeout,
 		})
-		cmdable = cluster
-		rawClient = cluster
 	} else {
 		addr := "localhost:6379"
 		if len(cfg.RedisAddr) > 0 {
 			addr = cfg.RedisAddr[0]
 		}
-		client := redis.NewClient(&redis.Options{
+		client = redis.NewClient(&redis.Options{
 			Addr:         addr,
 			TLSConfig:    tlsConfig,
 			PoolSize:     cfg.PoolSize,
@@ -97,8 +93,6 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 			ReadTimeout:  readTimeout,
 			WriteTimeout: writeTimeout,
 		})
-		cmdable = client
-		rawClient = client
 	}
 
 	// Retry configuration
@@ -118,8 +112,7 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 	}
 
 	rt := &RedisTransport{
-		client:             cmdable,
-		rawClient:          rawClient,
+		client:             client,
 		useCompression:     cfg.UseCompression,
 		useEncryption:      cfg.UseEncryption,
 		serviceReplyStream: cfg.ServiceReplyStream,
@@ -147,7 +140,7 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 }
 
 func (r *RedisTransport) Close() error {
-	switch client := r.rawClient.(type) {
+	switch client := r.client.(type) {
 	case *redis.Client:
 		return client.Close()
 	case *redis.ClusterClient:
