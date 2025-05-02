@@ -9,7 +9,7 @@ import (
 )
 
 // PublishToDLQ publishes a message to the DLQ for further inspection.
-func PublishToDLQ(ctx context.Context, client *redis.Client, dlqStream string, originalStream string, message interface{}) error {
+func PublishToDLQ(ctx context.Context, client redis.Cmdable, dlqStream string, originalStream string, message interface{}) error {
 	dlqMessage := map[string]interface{}{
 		"original_stream": originalStream,
 		"body":            message,

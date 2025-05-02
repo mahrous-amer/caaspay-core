@@ -44,7 +44,7 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 
 	// Initialize transport
 	redisCfg := transport.RedisTransportConfig{
-		RedisAddr:          cfg.Framework.Transport.RedisAddress,
+		RedisAddr:          cfg.Framework.Transport.RedisAddr,
 		UseCompression:     cfg.Framework.Transport.UseCompression,
 		UseEncryption:      cfg.Framework.Transport.UseEncryption,
 		ServiceReplyStream: fmt.Sprintf("%s_reply", cfg.Framework.ServiceName),

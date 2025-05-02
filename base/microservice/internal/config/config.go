@@ -46,16 +46,31 @@ type RPCConfig struct {
 
 // TransportConfig contains messaging transport settings.
 type TransportConfig struct {
-	BrokerType     string `mapstructure:"broker_type"` // "redis", "nats", "kafka" (future extensibility)
-	RedisAddress   string `mapstructure:"redis_address"`
-	RedisCache     bool   `mapstructure:"redis_cache"`
-	UseTrimExact   bool   `mapstructure:"use_trim_exact"`
-	UseCluster     bool   `mapstructure:"use_cluster"`
-	PoolCount      int    `mapstructure:"pool_count"`
-	WaitTimeMs     int    `mapstructure:"wait_time_ms"`
-	UseEncryption  bool   `mapstructure:"use_encryption"`
-	UseCompression bool   `mapstructure:"use_compression"`
-	TLSRequired    bool   `mapstructure:"tls_required"` // Enforce TLS connections
+	BrokerType  string   `mapstructure:"broker_type"`  // "redis", "nats", "kafka" (future extensibility)
+	RedisAddr   []string `mapstructure:"redis_addr"`   // Redis server address or cluster endpoint
+	Password    string   `mapstructure:"password"`     // Optional Redis AUTH password
+	DB          int      `mapstructure:"db"`           // Optional DB selection
+	UseCluster  bool     `mapstructure:"use_cluster"`  // Use Redis Cluster mode
+	TLSRequired bool     `mapstructure:"tls_required"` // Enable TLS for Redis connections
+
+	UseCompression bool   `mapstructure:"use_compression"` // Enable message compression
+	UseEncryption  bool   `mapstructure:"use_encryption"`  // Enable message encryption
+	EncryptionKey  string `mapstructure:"encryption_key"`  // Encryption key for AES
+
+	ServiceReplyStream string        `mapstructure:"service_reply_stream"` // Default reply stream for RPC
+	DLQStream          string        `mapstructure:"dlq_stream"`           // Dead-letter stream for failed messages
+	MaxRetries         int           `mapstructure:"max_retries"`          // Retry attempts for transient failures
+	RetryDelay         time.Duration `mapstructure:"retry_delay"`          // Delay between retry attempts
+
+	// Connection Pool and Timeout Options
+	PoolSize        int           `mapstructure:"pool_size"`          // Max total connections
+	MinIdleConns    int           `mapstructure:"min_idle_conns"`     // Minimum idle connections
+	DialTimeout     time.Duration `mapstructure:"dial_timeout"`       // Timeout for initial connection
+	ReadTimeout     time.Duration `mapstructure:"read_timeout"`       // Timeout for read operations
+	WriteTimeout    time.Duration `mapstructure:"write_timeout"`      // Timeout for write operations
+	PoolTimeout     time.Duration `mapstructure:"pool_timeout"`       // Max time to wait for a free connection
+	ConnMaxIdleTime time.Duration `mapstructure:"conn_max_idle_time"` // Max idle time for connections
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`  // Max lifetime for a connection
 }
 
 // LoggingConfig contains logging-related settings.
@@ -253,12 +268,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.rpc.max_retries", 3)
 	v.SetDefault("framework.rpc.timeout_ms", 5000)
 	v.SetDefault("framework.transport.broker_type", "redis")
-	v.SetDefault("framework.transport.redis_address", "redis://localhost:6379")
-	v.SetDefault("framework.transport.redis_cache", false)
-	v.SetDefault("framework.transport.use_trim_exact", false)
+	v.SetDefault("framework.transport.redis_addr", []string{"localhost:6379"})
 	v.SetDefault("framework.transport.use_cluster", false)
-	v.SetDefault("framework.transport.pool_count", 10)
-	v.SetDefault("framework.transport.wait_time_ms", 15000)
+	v.SetDefault("framework.transport.pool_size", 10)
+	v.SetDefault("framework.transport.min_idle_conns", 2)
+	v.SetDefault("framework.transport.dial_timeout", 5*time.Second)
+	v.SetDefault("framework.transport.read_timeout", 2*time.Second)
+	v.SetDefault("framework.transport.write_timeout", 2*time.Second)
+	v.SetDefault("framework.transport.pool_timeout", 1*time.Second)
+	v.SetDefault("framework.transport.conn_max_idle_time", 20*time.Second)
+	v.SetDefault("framework.transport.conn_max_lifetime", 200*time.Second)
+	v.SetDefault("framework.transport.max_retries", 1)
 	v.SetDefault("framework.transport.use_encryption", true)
 	v.SetDefault("framework.transport.use_compression", true)
 	v.SetDefault("framework.transport.tls_required", false)

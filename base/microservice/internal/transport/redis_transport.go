@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"time"
 
@@ -12,7 +13,8 @@ import (
 
 // RedisTransport implements the Transport interface using Redis Streams.
 type RedisTransport struct {
-	client             *redis.Client
+	client             redis.Cmdable
+	rawClient          interface{}
 	useCompression     bool
 	useEncryption      bool
 	serviceReplyStream string
@@ -27,23 +29,79 @@ type RedisTransport struct {
 
 // RedisTransportConfig defines the configuration for RedisTransport.
 type RedisTransportConfig struct {
-	RedisAddr          string
-	UseCompression     bool
-	UseEncryption      bool
-	ServiceReplyStream string
-	EncryptionKey      string
-	MaxRetries         int
-	RetryDelay         time.Duration
-	DLQStream          string
+	RedisAddr          []string      // Redis node addresses (cluster or single-node)
+	UseCluster         bool          // Use redis cluster client
+	TLSRequired        bool          // Use TLS when connecting
+	UseCompression     bool          // Enable compression of message payloads
+	UseEncryption      bool          // Enable encryption of message payloads
+	ServiceReplyStream string        // Stream used for service RPC responses
+	EncryptionKey      string        // Encryption key (AES-GCM)
+	MaxRetries         int           // Max number of retries on failure (default 3)
+	RetryDelay         time.Duration // Delay between retries (default 500ms)
+	DLQStream          string        // Optional: stream name for dead-letter queue
+	PoolSize           int           // Max number of Redis connections
+	MinIdleConns       int           // Minimum idle connections in pool
+	DialTimeout        time.Duration // Timeout for establishing new connections
+	ReadTimeout        time.Duration // Timeout for socket reads
+	WriteTimeout       time.Duration // Timeout for socket writes
 }
 
-// NewRedisTransport initializes a RedisTransport with the provided configuration and logger.
 func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisTransport {
-	client := redis.NewClient(&redis.Options{
-		Addr: cfg.RedisAddr,
-		// Enterprise: can configure poolSize, minIdleConns, etc., from cfg.
-	})
+	var cmdable redis.Cmdable
+	var rawClient interface{}
 
+	// Default timeouts
+	dialTimeout := cfg.DialTimeout
+	if dialTimeout == 0 {
+		dialTimeout = 5 * time.Second
+	}
+	readTimeout := cfg.ReadTimeout
+	if readTimeout == 0 {
+		readTimeout = 3 * time.Second
+	}
+	writeTimeout := cfg.WriteTimeout
+	if writeTimeout == 0 {
+		writeTimeout = 3 * time.Second
+	}
+
+	// TLS handling
+	var tlsConfig *tls.Config
+	if cfg.TLSRequired {
+		tlsConfig = &tls.Config{InsecureSkipVerify: false}
+	}
+
+	// Redis client setup
+	if cfg.UseCluster {
+		cluster := redis.NewClusterClient(&redis.ClusterOptions{
+			Addrs:        cfg.RedisAddr,
+			TLSConfig:    tlsConfig,
+			PoolSize:     cfg.PoolSize,
+			MinIdleConns: cfg.MinIdleConns,
+			DialTimeout:  dialTimeout,
+			ReadTimeout:  readTimeout,
+			WriteTimeout: writeTimeout,
+		})
+		cmdable = cluster
+		rawClient = cluster
+	} else {
+		addr := "localhost:6379"
+		if len(cfg.RedisAddr) > 0 {
+			addr = cfg.RedisAddr[0]
+		}
+		client := redis.NewClient(&redis.Options{
+			Addr:         addr,
+			TLSConfig:    tlsConfig,
+			PoolSize:     cfg.PoolSize,
+			MinIdleConns: cfg.MinIdleConns,
+			DialTimeout:  dialTimeout,
+			ReadTimeout:  readTimeout,
+			WriteTimeout: writeTimeout,
+		})
+		cmdable = client
+		rawClient = client
+	}
+
+	// Retry configuration
 	maxRetries := cfg.MaxRetries
 	if maxRetries <= 0 {
 		maxRetries = 3
@@ -52,13 +110,16 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 	if retryDelay <= 0 {
 		retryDelay = 500 * time.Millisecond
 	}
+
+	// Dead Letter Queue fallback
 	dlqStream := cfg.DLQStream
 	if dlqStream == "" {
 		dlqStream = "dlq:" + cfg.ServiceReplyStream
 	}
 
 	rt := &RedisTransport{
-		client:             client,
+		client:             cmdable,
+		rawClient:          rawClient,
 		useCompression:     cfg.UseCompression,
 		useEncryption:      cfg.UseEncryption,
 		serviceReplyStream: cfg.ServiceReplyStream,
@@ -69,11 +130,31 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) *RedisT
 		logger:             logger,
 	}
 
+	// Check connection once at startup
 	if err := rt.verifyConnection(); err != nil {
-		logger.Error(context.Background(), "RedisTransport connection verification failed", map[string]interface{}{"error": err.Error()})
+		logger.Error(context.Background(), "❌ RedisTransport connection verification failed", map[string]interface{}{"error": err.Error()})
+	} else {
+		logger.Info(context.Background(), "✅ RedisTransport connected successfully", map[string]interface{}{
+			"cluster":     cfg.UseCluster,
+			"pool_size":   cfg.PoolSize,
+			"min_idle":    cfg.MinIdleConns,
+			"compression": cfg.UseCompression,
+			"encryption":  cfg.UseEncryption,
+		})
 	}
 
 	return rt
+}
+
+func (r *RedisTransport) Close() error {
+	switch client := r.rawClient.(type) {
+	case *redis.Client:
+		return client.Close()
+	case *redis.ClusterClient:
+		return client.Close()
+	default:
+		return fmt.Errorf("Cannot close; unknown Redis client type")
+	}
 }
 
 // IsHealthy returns true if Redis PING succeeds.
@@ -264,10 +345,6 @@ func (r *RedisTransport) Subscribe(stream string, handler HandlerFunc) error {
 			}
 		}
 	}
-}
-
-func (r *RedisTransport) Close() error {
-	return r.client.Close()
 }
 
 func (r *RedisTransport) prepareData(data []byte) ([]byte, error) {
