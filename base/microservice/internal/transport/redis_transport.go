@@ -63,7 +63,7 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) (*Redis
 	}
 	maxRetries := cfg.MaxRetries
 	if maxRetries <= 0 {
-		maxRetries = 3
+		maxRetries = 300
 	}
 	retryDelay := cfg.RetryDelay
 	if retryDelay <= 0 {
@@ -128,11 +128,17 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) (*Redis
 		trials++
 		if err := rt.verifyConnection(); err != nil {
 			logger.Error(context.Background(), "⏳ RedisTransport connection failed, retrying...", map[string]interface{}{
+
 				"error": err.Error(),
+				"trial": trials,
+				"delay": rt.retryDelay * time.Duration(trials),
 			})
 			if trials >= maxRetries {
 
-				logger.Error(context.Background(), "❌ RedisTransport connection verification failed", map[string]interface{}{"error": err.Error()})
+				logger.Error(context.Background(), "❌ RedisTransport connection verification failed", map[string]interface{}{
+					"error": err.Error(),
+					"trial": trials,
+				})
 				return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 			}
 			time.Sleep(rt.retryDelay * time.Duration(trials))

@@ -75,6 +75,12 @@ func (h *HealthServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Service not healthy", http.StatusServiceUnavailable)
 		return
 	}
+
+  // Check Redis health
+	if !h.service.frameworkCtx.IsHealthy() {
+		http.Error(w, "Framework Redis not healthy", http.StatusServiceUnavailable)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }

@@ -48,8 +48,8 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		UseCompression:     cfg.Framework.Transport.UseCompression,
 		UseEncryption:      cfg.Framework.Transport.UseEncryption,
 		ServiceReplyStream: fmt.Sprintf("%s_reply", cfg.Framework.ServiceName),
-		MaxRetries:         3,
-		RetryDelay:         500 * time.Millisecond,
+		MaxRetries:         cfg.Framework.Transport.MaxRetries,
+		RetryDelay:         cfg.Framework.Transport.RetryDelay,
 	}
 	redisTransport, err := transport.NewRedisTransport(redisCfg, logger)
 	if err != nil {
@@ -79,7 +79,7 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 
 	// Setup heartbeat if its enabled
 	if cfg.Framework.HealthCheck.HeartbeatEnabled {
-		go startHeartbeat(logger, cfg.Framework.HealthCheck.HeartbeatInterval)
+		go startHeartbeat(logger, redisTransport, cfg.Framework.HealthCheck.HeartbeatInterval)
 	}
 
 	return &FrameworkContext{
@@ -94,14 +94,30 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 	}, nil
 }
 
-func startHeartbeat(logger *logging.Logger, interval time.Duration) {
+func (f *FrameworkContext) IsHealthy() bool {
+	if r, ok := f.Transport.(interface {
+		IsHealthy() bool
+	}); ok {
+		return r.IsHealthy()
+	}
+	return false
+}
+
+func startHeartbeat(logger *logging.Logger, transport transport.Transport, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			logger.Info(context.Background(), "💓 Framework heartbeat...", nil)
+			ctx := context.Background()
+
+			// Check Redis transport health
+			if transport.IsHealthy() {
+				logger.Info(ctx, "💓 Framework heartbeat... Redis is healthy", nil)
+			} else {
+				logger.Error(ctx, "💔 Framework heartbeat... Redis is NOT healthy", nil)
+			}
 		}
 	}
 }
