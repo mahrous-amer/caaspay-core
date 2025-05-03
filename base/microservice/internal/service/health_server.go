@@ -17,7 +17,7 @@ type HealthServer struct {
 
 // NewHealthServer initializes a new health server using configuration.
 func NewHealthServer(service *ServiceStruct) *HealthServer {
-	cfg := service.frameworkCtx.Config.Framework.HealthCheck
+	cfg := service.frameworkCtx.Config().Framework.HealthCheck
 
 	mux := http.NewServeMux()
 	healthServer := &HealthServer{
@@ -44,12 +44,12 @@ func NewHealthServer(service *ServiceStruct) *HealthServer {
 // Start launches the HTTP server in background.
 func (h *HealthServer) Start() {
 	go func() {
-		h.service.frameworkCtx.Logger.Info(context.Background(), "🔎 Health server starting...", map[string]interface{}{
+		h.service.frameworkCtx.Logger().Info(context.Background(), "🔎 Health server starting...", map[string]interface{}{
 			"addr": h.server.Addr,
 		})
 
 		if err := h.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			h.service.frameworkCtx.Logger.Error(context.Background(), "❌ Health server crashed", map[string]interface{}{
+			h.service.frameworkCtx.Logger().Error(context.Background(), "❌ Health server crashed", map[string]interface{}{
 				"error": err.Error(),
 			})
 		}
@@ -61,9 +61,9 @@ func (h *HealthServer) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	h.service.frameworkCtx.Logger.Info(context.Background(), "🛑 Shutting down health server...", nil)
+	h.service.frameworkCtx.Logger().Info(context.Background(), "🛑 Shutting down health server...", nil)
 	if err := h.server.Shutdown(ctx); err != nil {
-		h.service.frameworkCtx.Logger.Error(context.Background(), "❌ Health server shutdown error", map[string]interface{}{
+		h.service.frameworkCtx.Logger().Error(context.Background(), "❌ Health server shutdown error", map[string]interface{}{
 			"error": err.Error(),
 		})
 	}
@@ -76,7 +76,7 @@ func (h *HealthServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-  // Check Redis health
+	// Check Redis health
 	if !h.service.frameworkCtx.IsHealthy() {
 		http.Error(w, "Framework Redis not healthy", http.StatusServiceUnavailable)
 		return

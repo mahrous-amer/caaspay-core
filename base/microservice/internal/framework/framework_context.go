@@ -11,20 +11,21 @@ import (
 	"github.com/caaspay/caaspay-core/internal/metrics"
 	"github.com/caaspay/caaspay-core/internal/storage"
 	"github.com/caaspay/caaspay-core/internal/transport"
+	"github.com/caaspay/caaspay-core/internal/validation"
 	"github.com/caaspay/caaspay-core/pkg/api"
 )
 
 // FrameworkContext encapsulates all framework components.
 type FrameworkContext struct {
-	config        *config.Config
 	logger        api.LoggerInterface
-	metrics       api.MetricsInterface
+	metrics       *metrics.Metrics
 	transport     transport.Transport
 	storage       storage.Store
 	compliance    api.ComplianceReporterInterface
-	serviceName   string
+	config        *config.Config
 	serviceConfig *config.ServiceConfig
-	service       api.ServiceInterface
+	serviceName   string
+	validator     api.ValidatorInterface
 }
 
 // NewFrameworkContext initializes all framework components and returns a unified context.
@@ -49,6 +50,7 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		MaxRetries:         cfg.Framework.Transport.MaxRetries,
 		RetryDelay:         cfg.Framework.Transport.RetryDelay,
 	}
+
 	redisTransport, err := transport.NewRedisTransport(redisCfg, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize transport: %w", err)
@@ -60,6 +62,7 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 	}
 
 	complianceReporter := compliance.NewComplianceReporter(cfg, metricsInstance)
+	validator := validation.NewValidator()
 
 	serviceConfig := &config.ServiceConfig{}
 	svcName := cfg.Framework.ServiceName
@@ -76,42 +79,39 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 	}
 
 	return &FrameworkContext{
-		config:        cfg,
 		logger:        logger,
 		metrics:       metricsInstance,
 		transport:     redisTransport,
 		storage:       store,
 		compliance:    complianceReporter,
-		serviceName:   cfg.Framework.ServiceName,
+		config:        cfg,
 		serviceConfig: serviceConfig,
+		serviceName:   cfg.Framework.ServiceName,
+		validator:     validator,
 	}, nil
 }
 
-// IsHealthy checks if the framework and its key components are healthy.
-func (f *FrameworkContext) IsHealthy() bool {
-	if r, ok := f.transport.(interface{ IsHealthy() bool }); ok {
-		if !r.IsHealthy() {
-			f.logger.Error(context.Background(), "🚨 Transport not healthy", nil)
-			return false
-		}
-	}
+func (f *FrameworkContext) Logger() api.LoggerInterface          { return f.logger }
+func (f *FrameworkContext) Metrics() api.MetricsInterface        { return f.metrics }
+func (f *FrameworkContext) Transport() api.TransportInterface    { return f.transport }
+func (f *FrameworkContext) Storage() api.StorageInterface        { return f.storage }
+func (f *FrameworkContext) Compliance() api.ComplianceInterface  { return f.compliance }
+func (f *FrameworkContext) Config() *config.Config               { return f.config }
+func (f *FrameworkContext) ServiceConfig() *config.ServiceConfig { return f.serviceConfig }
+func (f *FrameworkContext) ServiceName() string                  { return f.serviceName }
+func (f *FrameworkContext) Validator() api.ValidatorInterface    { return f.validator }
 
-	if f.service != nil {
-		if svc, ok := f.service.(interface {
-			HealthCheck(ctx context.Context) error
-		}); ok {
-			if err := svc.HealthCheck(context.Background()); err != nil {
-				f.logger.Error(context.Background(), "🚨 Service HealthCheck failed", map[string]interface{}{
-					"error": err.Error(),
-				})
-				return false
-			}
+func (f *FrameworkContext) IsHealthy() bool {
+	if r, ok := f.Transport().(interface{ IsHealthy() bool }); ok {
+		if !r.IsHealthy() {
+			f.Logger().Error(context.Background(), "🚨 Transport not healthy", nil)
+			return false
 		}
 	}
 	return true
 }
 
-func startHeartbeat(logger api.LoggerInterface, transport transport.Transport, interval time.Duration) {
+func startHeartbeat(logger api.LoggerInterface, transport api.TransportInterface, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -127,45 +127,3 @@ func startHeartbeat(logger api.LoggerInterface, transport transport.Transport, i
 		}
 	}
 }
-
-// Public accessors
-func (f *FrameworkContext) Config() *config.Config {
-	return f.cfg
-}
-
-func (f *FrameworkContext) Logger() api.LoggerInterface {
-	return f.logger
-}
-
-func (f *FrameworkContext) Metrics() api.MetricsInterface {
-	return f.metrics
-}
-
-func (f *FrameworkContext) Transport() api.TransportInterface {
-	return f.transport
-}
-
-func (f *FrameworkContext) Storage() api.StorageInterface {
-	return f.storage
-}
-
-func (f *FrameworkContext) Compliance() api.ComplianceInterface {
-	return f.compliance
-}
-
-func (f *FrameworkContext) ServiceConfig() *config.ServiceConfig {
-	return f.serviceConfig
-}
-
-func (f *FrameworkContext) SetService(s api.ServiceInterface) {
-	f.service = s
-}
-
-func (f *FrameworkContext) Service() api.ServiceInterface {
-	return f.service
-}
-
-func (f *FrameworkContext) ServiceName() string {
-	return f.config.Framework.ServiceName
-}
-

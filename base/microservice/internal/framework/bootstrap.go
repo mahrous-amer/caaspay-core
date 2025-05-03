@@ -8,11 +8,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/caaspay/caaspay-core/internal/service"
 	"github.com/caaspay/caaspay-core/pkg/api"
 )
 
 // Bootstrap simplifies service startup and lifecycle management.
-func Bootstrap(create func(*FrameworkContext) api.ServiceInterface) {
+func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) {
 	ctx := context.Background()
 
 	// Step 1: Init framework
@@ -21,22 +22,21 @@ func Bootstrap(create func(*FrameworkContext) api.ServiceInterface) {
 		log.Fatalf("❌ Failed to initialize framework: %v", err)
 	}
 
-	// Step 2: Create developer service and inject
+	// Step 2: Create developer service
 	svc := create(fwCtx)
-	fwCtx.ServiceInstance = svc
 
 	// Step 3: Build ServiceStruct to wire framework + logic
 	svcStruct, err := service.NewServiceStruct(fwCtx, svc)
 	if err != nil {
-		fwCtx.Logger.Error(ctx, "❌ Service initialization failed", map[string]interface{}{"error": err.Error()})
+		fwCtx.Logger().Error(ctx, "❌ Service initialization failed", map[string]interface{}{"error": err.Error()})
 		os.Exit(1)
 	}
 
-	fwCtx.Logger.Info(ctx, "✅ Service initialized", nil)
+	fwCtx.Logger().Info(ctx, "✅ Service initialized", nil)
 
 	// Step 4: Start service
 	go func() {
-		fwCtx.Logger.Info(ctx, "🚀 Service is starting...", nil)
+		fwCtx.Logger().Info(ctx, "🚀 Service is starting...", nil)
 		svcStruct.Run()
 	}()
 
@@ -45,8 +45,8 @@ func Bootstrap(create func(*FrameworkContext) api.ServiceInterface) {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigChan
 
-	fwCtx.Logger.Info(ctx, "⚠️ Shutdown signal received", map[string]interface{}{"signal": sig.String()})
-	fwCtx.Logger.Info(ctx, "🛑 Initiating graceful shutdown...", nil)
+	fwCtx.Logger().Info(ctx, "⚠️ Shutdown signal received", map[string]interface{}{"signal": sig.String()})
+	fwCtx.Logger().Info(ctx, "🛑 Initiating graceful shutdown...", nil)
 	svcStruct.Shutdown()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -54,10 +54,9 @@ func Bootstrap(create func(*FrameworkContext) api.ServiceInterface) {
 
 	select {
 	case <-svcStruct.Done():
-		fwCtx.Logger.Info(ctx, "✅ Service stopped gracefully", nil)
+		fwCtx.Logger().Info(ctx, "✅ Service stopped gracefully", nil)
 	case <-shutdownCtx.Done():
-		fwCtx.Logger.Error(ctx, "❌ Shutdown timed out. Forcing exit.", nil)
+		fwCtx.Logger().Error(ctx, "❌ Shutdown timed out. Forcing exit.", nil)
 		os.Exit(1)
 	}
 }
-
