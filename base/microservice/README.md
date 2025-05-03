@@ -1,6 +1,6 @@
 # Framework Architecture
 
-```mermaidjs
+```mermaid
 graph TD
 
 subgraph Framework_Layer ["🧱 Framework Layer"]
@@ -44,6 +44,4 @@ Service_Layer --> Emitters
 Service_Layer --> Receivers
 Service_Layer --> UseCTX
 UseCTX -->|Provides| DI
-```
-```
 ```

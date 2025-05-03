@@ -24,6 +24,8 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 
 	// Step 2: Create developer service
 	svc := create(fwCtx)
+	// set the reference inside the context
+	fwCtx.SetService(svc)
 
 	// Step 3: Build ServiceStruct to wire framework + logic
 	svcStruct, err := service.NewServiceStruct(fwCtx, svc)

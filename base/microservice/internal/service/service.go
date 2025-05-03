@@ -129,8 +129,11 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 		methodName := method.Name
 
 		switch {
-		case method.Type.NumIn() == 2 && method.Type.In(0).String() == "context.Context" && hasPrefix(methodName, "RPC_"):
+		case method.Type.NumIn() == 3 &&
+			method.Type.In(1).String() == "context.Context" &&
+			hasPrefix(methodName, "RPC_"):
 			stream := trimPrefix(methodName, "RPC_")
+			s.frameworkCtx.Logger().Info(context.Background(), "🔌 Registering RPC", map[string]interface{}{"method": methodName, "stream": stream})
 			s.registerRPCMethod(stream, methodValue, method.Type)
 		case method.Type.NumIn() == 2 && method.Type.In(0).String() == "context.Context" && hasPrefix(methodName, "Emitter_"):
 			stream := trimPrefix(methodName, "Emitter_")

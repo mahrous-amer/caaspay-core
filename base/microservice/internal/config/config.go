@@ -61,6 +61,7 @@ type TransportConfig struct {
 	DLQStream          string        `mapstructure:"dlq_stream"`           // Dead-letter stream for failed messages
 	MaxRetries         int           `mapstructure:"max_retries"`          // Retry attempts for transient failures
 	RetryDelay         time.Duration `mapstructure:"retry_delay"`          // Delay between retry attempts
+	StreamReadCount    int64         `mapstructure:"stream_read_count"`    // Number of messages to read from stream
 
 	// Connection Pool and Timeout Options
 	PoolSize        int           `mapstructure:"pool_size"`          // Max total connections
@@ -272,6 +273,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.transport.use_cluster", false)
 	v.SetDefault("framework.transport.pool_size", 10)
 	v.SetDefault("framework.transport.min_idle_conns", 2)
+	v.SetDefault("framework.transport.stream_read_count", 10)
 	v.SetDefault("framework.transport.dial_timeout", 5*time.Second)
 	v.SetDefault("framework.transport.read_timeout", 2*time.Second)
 	v.SetDefault("framework.transport.retry_delay", 1*time.Second)

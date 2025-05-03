@@ -18,14 +18,15 @@ import (
 // FrameworkContext encapsulates all framework components.
 type FrameworkContext struct {
 	logger        api.LoggerInterface
-	metrics       *metrics.Metrics
-	transport     transport.Transport
-	storage       storage.Store
-	compliance    api.ComplianceReporterInterface
+	metrics       api.MetricsInterface
+	transport     api.TransportInterface
+	storage       api.StorageInterface
+	compliance    api.ComplianceInterface
 	config        *config.Config
 	serviceConfig *config.ServiceConfig
 	serviceName   string
 	validator     api.ValidatorInterface
+	service       api.ServiceInterface
 }
 
 // NewFrameworkContext initializes all framework components and returns a unified context.
@@ -49,6 +50,9 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		ServiceReplyStream: fmt.Sprintf("%s_reply", cfg.Framework.ServiceName),
 		MaxRetries:         cfg.Framework.Transport.MaxRetries,
 		RetryDelay:         cfg.Framework.Transport.RetryDelay,
+		ReadTimeout:        cfg.Framework.Transport.ReadTimeout,
+		WriteTimeout:       cfg.Framework.Transport.WriteTimeout,
+		StreamReadCount:    cfg.Framework.Transport.StreamReadCount,
 	}
 
 	redisTransport, err := transport.NewRedisTransport(redisCfg, logger)
@@ -74,11 +78,7 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		serviceConfig = config.DefaultServiceConfig()
 	}
 
-	if cfg.Framework.HealthCheck.HeartbeatEnabled {
-		go startHeartbeat(logger, redisTransport, cfg.Framework.HealthCheck.HeartbeatInterval)
-	}
-
-	return &FrameworkContext{
+	ctx := &FrameworkContext{
 		logger:        logger,
 		metrics:       metricsInstance,
 		transport:     redisTransport,
@@ -88,7 +88,13 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		serviceConfig: serviceConfig,
 		serviceName:   cfg.Framework.ServiceName,
 		validator:     validator,
-	}, nil
+	}
+
+	if cfg.Framework.HealthCheck.HeartbeatEnabled {
+		go startHeartbeat(ctx)
+	}
+
+	return ctx, nil
 }
 
 func (f *FrameworkContext) Logger() api.LoggerInterface          { return f.logger }
@@ -100,29 +106,40 @@ func (f *FrameworkContext) Config() *config.Config               { return f.conf
 func (f *FrameworkContext) ServiceConfig() *config.ServiceConfig { return f.serviceConfig }
 func (f *FrameworkContext) ServiceName() string                  { return f.serviceName }
 func (f *FrameworkContext) Validator() api.ValidatorInterface    { return f.validator }
+func (f *FrameworkContext) SetService(s api.ServiceInterface)    { f.service = s }
+func (f *FrameworkContext) Service() api.ServiceInterface        { return f.service }
 
 func (f *FrameworkContext) IsHealthy() bool {
-	if r, ok := f.Transport().(interface{ IsHealthy() bool }); ok {
-		if !r.IsHealthy() {
-			f.Logger().Error(context.Background(), "🚨 Transport not healthy", nil)
-			return false
+	ctx := context.Background()
+	healthy := true
+
+	if !f.transport.IsHealthy() {
+		f.logger.Error(ctx, "🚨 Transport not healthy", nil)
+		healthy = false
+	}
+
+	if f.service != nil {
+		if err := f.service.HealthCheck(ctx); err != nil {
+			f.logger.Error(ctx, "🚨 Service health check failed", map[string]interface{}{"error": err.Error()})
+			healthy = false
 		}
 	}
-	return true
+
+	return healthy
 }
 
-func startHeartbeat(logger api.LoggerInterface, transport api.TransportInterface, interval time.Duration) {
-	ticker := time.NewTicker(interval)
+func startHeartbeat(f *FrameworkContext) {
+	ticker := time.NewTicker(f.config.Framework.HealthCheck.HeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			ctx := context.Background()
-			if transport.IsHealthy() {
-				logger.Info(ctx, "💓 Framework heartbeat... Redis is healthy", nil)
+			if f.IsHealthy() {
+				f.logger.Info(ctx, "💓 Framework heartbeat... all systems healthy", nil)
 			} else {
-				logger.Error(ctx, "💔 Framework heartbeat... Redis is NOT healthy", nil)
+				f.logger.Error(ctx, "💔 Framework heartbeat... one or more systems unhealthy", nil)
 			}
 		}
 	}

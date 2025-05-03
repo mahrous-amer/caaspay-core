@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"time"
 
@@ -19,9 +20,11 @@ type RedisTransport struct {
 	serviceReplyStream string
 	encryptionKey      []byte
 
-	maxRetries int
-	retryDelay time.Duration
-	dlqStream  string
+	maxRetries      int
+	retryDelay      time.Duration
+	blockTimeout    time.Duration
+	streamReadCount int64
+	dlqStream       string
 
 	logger *logging.Logger
 }
@@ -43,6 +46,7 @@ type RedisTransportConfig struct {
 	DialTimeout        time.Duration // Timeout for establishing new connections
 	ReadTimeout        time.Duration // Timeout for socket reads
 	WriteTimeout       time.Duration // Timeout for socket writes
+	StreamReadCount    int64         // Number of messages to read from stream at once
 }
 
 func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) (*RedisTransport, error) {
@@ -69,7 +73,6 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) (*Redis
 	if retryDelay <= 0 {
 		retryDelay = 1000 * time.Millisecond
 	}
-
 	// TLS handling
 	var tlsConfig *tls.Config
 	if cfg.TLSRequired {
@@ -119,6 +122,8 @@ func NewRedisTransport(cfg RedisTransportConfig, logger *logging.Logger) (*Redis
 		retryDelay:         retryDelay,
 		dlqStream:          dlqStream,
 		logger:             logger,
+		blockTimeout:       readTimeout,
+		streamReadCount:    cfg.StreamReadCount,
 	}
 
 	// Check connection once at startup
@@ -236,7 +241,7 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 			res, err := r.client.XRead(ctx, &redis.XReadArgs{
 				Streams: []string{replyStream, "0"},
 				Count:   1,
-				Block:   5 * time.Second,
+				Block:   r.blockTimeout,
 			}).Result()
 			if err != nil {
 				if ctx.Err() != nil {
@@ -312,12 +317,17 @@ func (r *RedisTransport) Subscribe(stream string, handler HandlerFunc) error {
 			Group:    group,
 			Consumer: consumer,
 			Streams:  []string{stream, ">"},
-			Count:    1,
-			Block:    0,
+			Count:    r.streamReadCount,
+			Block:    r.blockTimeout,
 		}).Result()
 		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				// Just block timeout, no messages — do NOT log this
+				return nil
+			}
+			// Log actual errors
 			r.logger.Error(ctx, "Error reading from stream", map[string]interface{}{"error": err.Error()})
-			continue
+			return err
 		}
 		for _, s := range res {
 			for _, msg := range s.Messages {

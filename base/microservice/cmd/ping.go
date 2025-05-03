@@ -8,23 +8,12 @@ import (
 	"github.com/caaspay/caaspay-core/pkg/api"
 )
 
-// Struct for RPC input
-type PingRequest struct {
-	Message string `json:"message"`
-}
-
 // Optional: Add validation if needed
 func (p *PingRequest) Validate() error {
 	if p.Message == "" {
 		return fmt.Errorf("message is required")
 	}
 	return nil
-}
-
-// Struct for RPC output
-type PingResponse struct {
-	Message string                 `json:"message"`
-	Input   map[string]interface{} `json:"input"`
 }
 
 type pingService struct {
@@ -57,17 +46,21 @@ func (s *pingService) HealthCheck(ctx context.Context) error {
 	return fmt.Errorf("pingService unhealthy")
 }
 
-// RPC method: uses struct for input, validated automatically
+type PingRequest struct {
+	Message string `json:"message"`
+}
+
+type PingResponse struct {
+	Response string                 `json:"response"`
+	Input    map[string]interface{} `json:"input"`
+}
+
 func (s *pingService) RPC_Ping(ctx context.Context, input PingRequest) (PingResponse, error) {
 	s.ctx.Logger().Info(ctx, "📡 RPC_Ping invoked", nil)
-
-	resp := PingResponse{
-		Message: "pong",
-		Input: map[string]interface{}{
-			"message": input.Message,
-		},
-	}
-	return resp, nil
+	return PingResponse{
+		Response: "pong",
+		Input:    map[string]interface{}{"message": input.Message},
+	}, nil
 }
 
 func main() {
