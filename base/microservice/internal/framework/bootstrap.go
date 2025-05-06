@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,51 +15,79 @@ import (
 
 // Bootstrap simplifies service startup and lifecycle management.
 func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) {
-	ctx := context.Background()
+	// Step 1: Create unified root context
+	rootCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Step 1: Init framework
-	fwCtx, err := NewFrameworkContext()
+	// Step 2: Initialize the framework
+	fwCtx, err := NewFrameworkContext(rootCtx)
 	if err != nil {
 		log.Fatalf("❌ Failed to initialize framework: %v", err)
 	}
 
-	// Step 2: Create developer service
+	// Step 3: Create developer service instance and register
 	svc := create(fwCtx)
-	// set the reference inside the context
 	fwCtx.SetService(svc)
 
-	// Step 3: Build ServiceStruct to wire framework + logic
+	// Step 4: Bind framework to service lifecycle
 	svcStruct, err := service.NewServiceStruct(fwCtx, svc)
 	if err != nil {
-		fwCtx.Logger().Error(ctx, "❌ Service initialization failed", map[string]interface{}{"error": err.Error()})
+		fwCtx.Logger().Error("❌ Service initialization failed", map[string]interface{}{"error": err.Error()})
 		os.Exit(1)
 	}
 
-	fwCtx.Logger().Info(ctx, "✅ Service initialized", nil)
+	fwCtx.Logger().Info("✅ Service initialized", nil)
 
-	// Step 4: Start service
-	go func() {
-		fwCtx.Logger().Info(ctx, "🚀 Service is starting...", nil)
+	// Step 5: Start the main service (not under supervisor)
+	fwCtx.Supervisor().Go("service.run", func(ctx context.Context) error {
+		fwCtx.Logger().Info("🚀 Service is starting...", nil)
 		svcStruct.Run()
-	}()
+		return nil
+	})
 
-	// Step 5: Listen for shutdown
+	// Step 6: Trap OS signals for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigChan
 
-	fwCtx.Logger().Info(ctx, "⚠️ Shutdown signal received", map[string]interface{}{"signal": sig.String()})
-	fwCtx.Logger().Info(ctx, "🛑 Initiating graceful shutdown...", nil)
-	svcStruct.Shutdown()
+	fwCtx.Logger().Info("⏳ Waiting for any signal to shutdown...", nil)
+	var shutdownOnce sync.Once
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	fwCtx.Supervisor().Go("signal.handler", func(ctx context.Context) error {
+		select {
+		case sig := <-sigChan:
+			fwCtx.Logger().Info("⚠️ Shutdown signal received", map[string]interface{}{"signal": sig.String()})
+		case <-ctx.Done():
+			fwCtx.Logger().Info("🛑 Signal handler context canceled", nil)
+			return nil
+		}
 
-	select {
-	case <-svcStruct.Done():
-		fwCtx.Logger().Info(ctx, "✅ Service stopped gracefully", nil)
-	case <-shutdownCtx.Done():
-		fwCtx.Logger().Error(ctx, "❌ Shutdown timed out. Forcing exit.", nil)
-		os.Exit(1)
-	}
+		shutdownOnce.Do(func() {
+			fwCtx.Logger().Info("🛑 Initiating graceful shutdown...", nil)
+			svcStruct.Shutdown()
+		})
+
+		return nil
+	})
+
+	// Step 7: Wait for shutdown and exit
+	fwCtx.Supervisor().WaitAndShutdown(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		shutdownOnce.Do(func() {
+			fwCtx.Logger().Info("⏳ Performing shutdown...", nil)
+			svcStruct.Shutdown()
+		})
+
+		fwCtx.Logger().Info("⏳ Waiting for service.Done() or shutdown timeout...", nil)
+		select {
+		case <-svcStruct.Done():
+			fwCtx.Logger().Info("✅ Service stopped gracefully", nil)
+		case <-shutdownCtx.Done():
+			fwCtx.Logger().Error("❌ Shutdown timed out. Forcing exit.", nil)
+			os.Exit(1)
+		}
+	})
+
+	fwCtx.Logger().Info("🏁 Bootstrap shutdown complete", nil)
 }

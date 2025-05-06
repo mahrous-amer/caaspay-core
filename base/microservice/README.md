@@ -45,3 +45,33 @@ Service_Layer --> Receivers
 Service_Layer --> UseCTX
 UseCTX -->|Provides| DI
 ```
+
+### Framework Lifecycle
+
+```mermaid
+graph TD
+    Start[Bootstrap Called]
+    CreateCtx[Create Root Context]
+    InitFramework[NewFrameworkContext]
+    CreateService[Create Developer Service]
+    BindLifecycle[Bind ServiceStruct Lifecycle]
+    StartService[Supervisor Go: service_run]
+    TrapSignal[Supervisor Go: signal_handler]
+    WaitShutdown[WaitAndShutdown Called]
+    RunService[ServiceStruct.Run Loop]
+    Goroutines[Auto Register Methods]
+    HealthCheck[Start Health Server + Check Health]
+    WaitExit[Block on ctx.Done or error]
+    PerformShutdown[Run Shutdown Logic]
+    Exit[Process Exit]
+
+    Start --> CreateCtx --> InitFramework --> CreateService --> BindLifecycle
+    BindLifecycle --> StartService --> RunService --> Goroutines --> HealthCheck --> WaitExit
+    BindLifecycle --> TrapSignal
+    TrapSignal --> PerformShutdown
+    StartService --> WaitShutdown
+    PerformShutdown --> Exit
+    WaitShutdown --> Exit
+```
+
+

@@ -3,10 +3,11 @@ package tracing
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/config"
+	"github.com/caaspay/caaspay-core/internal/logging"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/jaeger"
 	"go.opentelemetry.io/otel/propagation"
@@ -14,55 +15,98 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/semconv/v1.4.0"
 	"go.opentelemetry.io/otel/trace"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+
+	ddtracer "gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
-// Tracer global variable
-var Tracer trace.Tracer
+// TracerManager holds tracer dependencies and context.
+type TracerManager struct {
+	ctx      context.Context
+	tracer   trace.Tracer
+	shutdown func()
+	logger   *logging.Logger
+}
 
-// InitTracing initializes tracing using provided observability config.
-func InitTracing(serviceName string, cfg *config.ObservabilityConfig) func() {
+// NewTracerManager initializes OpenTelemetry tracing with proper logging and shutdown.
+func NewTracerManager(ctx context.Context, serviceName string, cfg *config.ObservabilityConfig, logger *logging.Logger) (*TracerManager, error) {
 	if !cfg.TracingEnabled {
-		log.Println("⚠️ Tracing is disabled in configuration.")
-		return func() {} // No-op shutdown
+		logger.Warn("⚠️ Tracing is disabled in configuration", nil)
+		return &TracerManager{
+			ctx:      ctx,
+			tracer:   trace.NewNoopTracerProvider().Tracer(serviceName),
+			shutdown: func() {},
+			logger:   logger,
+		}, nil
 	}
 
-	var tp *sdktrace.TracerProvider
-	var err error
+	var (
+		tp  *sdktrace.TracerProvider
+		err error
+	)
 
 	switch cfg.MetricsAdapter {
 	case "jaeger":
-		tp, err = setupJaeger(serviceName, cfg)
+		tp, err = setupJaeger(serviceName, cfg, logger)
 	case "datadog":
-		tp, err = setupDatadog(serviceName, cfg)
+		tp, err = setupDatadog(serviceName, cfg, logger)
 	default:
-		log.Println("⚠️ No valid tracing adapter provided. Tracing disabled.")
-		return func() {} // No-op shutdown
+		logger.Warn("⚠️ No valid tracing adapter provided. Tracing disabled", nil)
+		return &TracerManager{
+			ctx:      ctx,
+			tracer:   trace.NewNoopTracerProvider().Tracer(serviceName),
+			shutdown: func() {},
+			logger:   logger,
+		}, nil
 	}
 
 	if err != nil {
-		log.Printf("❌ Failed to initialize tracing: %v", err)
-		return func() {} // No-op shutdown
+		logger.Error("❌ Failed to initialize tracing", map[string]interface{}{"error": err.Error()})
+		return &TracerManager{
+			ctx:      ctx,
+			tracer:   trace.NewNoopTracerProvider().Tracer(serviceName),
+			shutdown: func() {},
+			logger:   logger,
+		}, nil
 	}
 
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	Tracer = tp.Tracer(serviceName)
 
-	return func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		if err := tp.Shutdown(shutdownCtx); err != nil {
-			log.Printf("⚠️ Failed to shutdown tracer provider: %v", err)
-		}
-	}
+	logger.Info("✅ Tracing initialized successfully", map[string]interface{}{
+		"adapter": cfg.MetricsAdapter,
+	})
+
+	return &TracerManager{
+		ctx:    ctx,
+		tracer: tp.Tracer(serviceName),
+		logger: logger,
+		shutdown: func() {
+			shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := tp.Shutdown(shutdownCtx); err != nil {
+				logger.Error("⚠️ Failed to shutdown tracer provider", map[string]interface{}{
+					"error": err.Error(),
+				})
+			}
+		},
+	}, nil
 }
 
-// setupJaeger initializes a Jaeger exporter based on config values.
-func setupJaeger(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace.TracerProvider, error) {
-	jaegerEndpoint := fmt.Sprintf("http://%s:%d/api/traces", cfg.OpentracingHost, cfg.OpentracingPort)
+// StartSpan creates a new span using the internal tracer and context.
+func (tm *TracerManager) StartSpan(name string) (context.Context, trace.Span) {
+	return tm.tracer.Start(tm.ctx, name)
+}
 
-	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(jaegerEndpoint)))
+// Shutdown shuts down the tracer provider gracefully.
+func (tm *TracerManager) Shutdown() {
+	tm.shutdown()
+}
+
+// setupJaeger configures Jaeger exporter and tracer provider.
+func setupJaeger(serviceName string, cfg *config.ObservabilityConfig, logger *logging.Logger) (*sdktrace.TracerProvider, error) {
+	endpoint := fmt.Sprintf("http://%s:%d/api/traces", cfg.OpentracingHost, cfg.OpentracingPort)
+
+	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(endpoint)))
 	if err != nil {
 		return nil, err
 	}
@@ -75,19 +119,20 @@ func setupJaeger(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace
 		)),
 	)
 
-	log.Println("✅ Jaeger tracing initialized")
+	logger.Info("✅ Jaeger tracing initialized", map[string]interface{}{
+		"endpoint": endpoint,
+	})
+
 	return tp, nil
 }
 
-// setupDatadog initializes a Datadog exporter using observability config.
-func setupDatadog(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace.TracerProvider, error) {
-	// Initialize DataDog tracer
-	tracer.Start(
-		tracer.WithService(serviceName),
-		tracer.WithEnv("production"),
+// setupDatadog configures Datadog tracer and returns a tracer provider.
+func setupDatadog(serviceName string, cfg *config.ObservabilityConfig, logger *logging.Logger) (*sdktrace.TracerProvider, error) {
+	ddtracer.Start(
+		ddtracer.WithService(serviceName),
+		ddtracer.WithEnv(cfg.Env),
 	)
 
-	// Create a no-op tracer provider for DataDog since it uses its own tracer
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
@@ -95,11 +140,9 @@ func setupDatadog(serviceName string, cfg *config.ObservabilityConfig) (*sdktrac
 		)),
 	)
 
-	log.Println("✅ Datadog tracing initialized")
-	return tp, nil
-}
+	logger.Info("✅ Datadog tracing initialized", map[string]interface{}{
+		"env": cfg.Env,
+	})
 
-// StartSpan creates a new span from the context.
-func StartSpan(ctx context.Context, name string) (context.Context, trace.Span) {
-	return Tracer.Start(ctx, name)
+	return tp, nil
 }

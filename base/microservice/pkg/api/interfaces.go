@@ -5,58 +5,69 @@ import (
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/config"
-	"github.com/caaspay/caaspay-core/internal/transport"
 )
 
 // --- Service Lifecycle Interface ---
 type ServiceInterface interface {
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
-	HealthCheck(ctx context.Context) error
+	Start() error
+	Stop() error
+	HealthCheck() error
 }
 
 // --- Logger ---
 type LoggerInterface interface {
-	Info(ctx context.Context, message string, fields map[string]interface{})
-	Error(ctx context.Context, message string, fields map[string]interface{})
-	Debug(ctx context.Context, message string, fields map[string]interface{})
+	Info(message string, fields map[string]interface{})
+	Error(message string, fields map[string]interface{})
+	Warn(message string, fields map[string]interface{})
+	Debug(message string, fields map[string]interface{})
 }
 
 // --- Metrics ---
 type MetricsInterface interface {
-	Increment(ctx context.Context, metricName string)
-	RecordLatency(ctx context.Context, duration time.Duration)
-	RecordTiming(ctx context.Context, operation string, duration time.Duration)
-	IncrementError(ctx context.Context)
-	TrackActiveRequests(ctx context.Context, delta int64)
+	Increment(metricName string, delta ...int64)
+	RecordLatency(duration time.Duration)
+	RecordTiming(operation string, duration time.Duration)
+	IncrementError()
+	TrackActiveRequests(delta int64)
 	Shutdown()
-}
-
-// --- Transport (Publisher/Subscriber abstraction) ---
-type TransportInterface interface {
-	Publish(ctx context.Context, stream string, payload []byte) error
-	Subscribe(stream string, handler transport.HandlerFunc) error
-	IsHealthy() bool
 }
 
 // --- Storage abstraction ---
 type StorageInterface interface {
-	Get(ctx context.Context, key string) (interface{}, error)
-	Set(ctx context.Context, key string, value interface{}) error
+	Get(key string) (interface{}, error)
+	Set(key string, value interface{}) error
 }
 
 // --- Compliance tracking abstraction ---
 type ComplianceInterface interface {
-	TrackEvent(ctx context.Context, label string)
+	TrackEvent(label string)
 }
 
 type ComplianceReporterInterface interface {
-	TrackEvent(ctx context.Context, event string)
+	TrackEvent(event string)
 }
 
 // --- Validator abstraction ---
 type ValidatorInterface interface {
 	ValidateStruct(input interface{}) error
+}
+
+// SupervisorInterface defines how the framework manages goroutines.
+type SupervisorInterface interface {
+	// Go launches a managed goroutine that can report failure.
+	Go(name string, fn func(ctx context.Context) error)
+
+	// WaitAndShutdown blocks until an error or shutdown occurs, and runs shutdown logic.
+	WaitAndShutdown(onShutdown func())
+
+	// Shutdown triggers graceful cancellation of all supervised goroutines.
+	Shutdown()
+
+	// Done returns a channel closed once all goroutines have exited.
+	Done() <-chan struct{}
+
+	// StopAll is optionally used for forced termination or post-processing logic.
+	StopAll()
 }
 
 // --- Framework Context (Container) ---
@@ -67,8 +78,21 @@ type FrameworkContextInterface interface {
 	Storage() StorageInterface
 	Compliance() ComplianceInterface
 	Config() *config.Config
+	Context() context.Context
 	ServiceConfig() *config.ServiceConfig
 	ServiceName() string
 	Validator() ValidatorInterface
+	IsHealthy() bool
+	Service() ServiceInterface
+	SetService(s ServiceInterface)
+	Supervisor() SupervisorInterface
+}
+
+// TransportInterface defines the messaging transport interface for pluggable broker backends.
+type TransportInterface interface {
+	Publish(stream string, data []byte) error
+	Request(stream string, data []byte, timeout time.Duration) ([]byte, error)
+	Subscribe(stream string, handler HandlerFunc) error
+	Close() error
 	IsHealthy() bool
 }

@@ -105,6 +105,7 @@ type ObservabilityConfig struct {
 	MetricsHost     string `mapstructure:"metrics_host"`
 	MetricsPort     int    `mapstructure:"metrics_port"`
 	LogLevelMetrics bool   `mapstructure:"log_level_metrics"` // Toggle log-based metrics
+	Env             string `yaml:"env"`
 }
 
 // SecurityConfig contains security-related settings.
@@ -306,6 +307,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.observability.metrics_host", "localhost")
 	v.SetDefault("framework.observability.metrics_port", 8125)
 	v.SetDefault("framework.observability.log_level_metrics", true)
+	v.SetDefault("framework.observability.env", "test")
 	v.SetDefault("framework.security.enable_jwt", true)
 	v.SetDefault("framework.security.jwt_signing_method", "HS256")
 	v.SetDefault("framework.security.enable_rbac", true)

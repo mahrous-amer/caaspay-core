@@ -10,6 +10,8 @@ import (
 	"github.com/caaspay/caaspay-core/internal/logging"
 	"github.com/caaspay/caaspay-core/internal/metrics"
 	"github.com/caaspay/caaspay-core/internal/storage"
+	"github.com/caaspay/caaspay-core/internal/supervisor"
+	"github.com/caaspay/caaspay-core/internal/tracing"
 	"github.com/caaspay/caaspay-core/internal/transport"
 	"github.com/caaspay/caaspay-core/internal/validation"
 	"github.com/caaspay/caaspay-core/pkg/api"
@@ -17,6 +19,8 @@ import (
 
 // FrameworkContext encapsulates all framework components.
 type FrameworkContext struct {
+	ctx           context.Context
+	cancel        context.CancelFunc
 	logger        api.LoggerInterface
 	metrics       api.MetricsInterface
 	transport     api.TransportInterface
@@ -27,21 +31,31 @@ type FrameworkContext struct {
 	serviceName   string
 	validator     api.ValidatorInterface
 	service       api.ServiceInterface
+	supervisor    api.SupervisorInterface
 }
 
 // NewFrameworkContext initializes all framework components and returns a unified context.
-func NewFrameworkContext() (*FrameworkContext, error) {
+func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	logger := logging.NewLogger(cfg.Framework.ServiceName, cfg.Framework.Logging.Level, cfg.Framework.Logging.RedactSensitive)
+	ctx, cancel := context.WithCancel(rootCtx)
 
-	metricsInstance, err := metrics.NewMetrics(cfg.Framework.ServiceName, &cfg.Framework.Observability)
+	logger := logging.NewLogger(ctx, cfg.Framework.ServiceName, cfg.Framework.Logging.Level, cfg.Framework.Logging.RedactSensitive)
+
+	metricsInstance, err := metrics.NewMetrics(ctx, cfg.Framework.ServiceName, &cfg.Framework.Observability)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize metrics: %w", err)
 	}
+
+	tracerManager, err := tracing.NewTracerManager(ctx, cfg.Framework.ServiceName, &cfg.Framework.Observability, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize tracer manager: %w", err)
+	}
+
+	supervisorInstance := supervisor.NewSupervisor(ctx, cancel, logger)
 
 	redisCfg := transport.RedisTransportConfig{
 		RedisAddr:          cfg.Framework.Transport.RedisAddr,
@@ -55,7 +69,13 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		StreamReadCount:    cfg.Framework.Transport.StreamReadCount,
 	}
 
-	redisTransport, err := transport.NewRedisTransport(redisCfg, logger)
+	redisTransport, err := transport.NewRedisTransport(
+		ctx,
+		logger,
+		metricsInstance,
+		supervisorInstance,
+		redisCfg,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize transport: %w", err)
 	}
@@ -65,7 +85,7 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
 
-	complianceReporter := compliance.NewComplianceReporter(cfg, metricsInstance)
+	complianceReporter := compliance.NewComplianceReporter(ctx, cfg, logger, metricsInstance, tracerManager)
 	validator := validation.NewValidator()
 
 	serviceConfig := &config.ServiceConfig{}
@@ -78,7 +98,9 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		serviceConfig = config.DefaultServiceConfig()
 	}
 
-	ctx := &FrameworkContext{
+	fwCtx := &FrameworkContext{
+		ctx:           ctx,
+		cancel:        cancel,
 		logger:        logger,
 		metrics:       metricsInstance,
 		transport:     redisTransport,
@@ -88,13 +110,29 @@ func NewFrameworkContext() (*FrameworkContext, error) {
 		serviceConfig: serviceConfig,
 		serviceName:   cfg.Framework.ServiceName,
 		validator:     validator,
+		supervisor:    supervisorInstance,
 	}
 
 	if cfg.Framework.HealthCheck.HeartbeatEnabled {
-		go startHeartbeat(ctx)
+		fwCtx.supervisor.Go("framework_heartbeat", func(ctx context.Context) error {
+			ticker := time.NewTicker(cfg.Framework.HealthCheck.HeartbeatInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-ticker.C:
+					if fwCtx.IsHealthy() {
+						fwCtx.logger.Info("💓 Framework heartbeat... all systems healthy", nil)
+					} else {
+						fwCtx.logger.Error("💔 Framework heartbeat... one or more systems unhealthy", nil)
+					}
+				}
+			}
+		})
 	}
 
-	return ctx, nil
+	return fwCtx, nil
 }
 
 func (f *FrameworkContext) Logger() api.LoggerInterface          { return f.logger }
@@ -106,41 +144,25 @@ func (f *FrameworkContext) Config() *config.Config               { return f.conf
 func (f *FrameworkContext) ServiceConfig() *config.ServiceConfig { return f.serviceConfig }
 func (f *FrameworkContext) ServiceName() string                  { return f.serviceName }
 func (f *FrameworkContext) Validator() api.ValidatorInterface    { return f.validator }
+func (f *FrameworkContext) Supervisor() api.SupervisorInterface  { return f.supervisor }
+func (f *FrameworkContext) Context() context.Context             { return f.ctx }
 func (f *FrameworkContext) SetService(s api.ServiceInterface)    { f.service = s }
 func (f *FrameworkContext) Service() api.ServiceInterface        { return f.service }
 
 func (f *FrameworkContext) IsHealthy() bool {
-	ctx := context.Background()
 	healthy := true
 
 	if !f.transport.IsHealthy() {
-		f.logger.Error(ctx, "🚨 Transport not healthy", nil)
+		f.logger.Error("🚨 Transport not healthy", nil)
 		healthy = false
 	}
 
 	if f.service != nil {
-		if err := f.service.HealthCheck(ctx); err != nil {
-			f.logger.Error(ctx, "🚨 Service health check failed", map[string]interface{}{"error": err.Error()})
+		if err := f.service.HealthCheck(); err != nil {
+			f.logger.Error("🚨 Service health check failed", map[string]interface{}{"error": err.Error()})
 			healthy = false
 		}
 	}
 
 	return healthy
-}
-
-func startHeartbeat(f *FrameworkContext) {
-	ticker := time.NewTicker(f.config.Framework.HealthCheck.HeartbeatInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			ctx := context.Background()
-			if f.IsHealthy() {
-				f.logger.Info(ctx, "💓 Framework heartbeat... all systems healthy", nil)
-			} else {
-				f.logger.Error(ctx, "💔 Framework heartbeat... one or more systems unhealthy", nil)
-			}
-		}
-	}
 }

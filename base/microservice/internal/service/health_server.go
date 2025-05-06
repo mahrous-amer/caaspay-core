@@ -43,17 +43,19 @@ func NewHealthServer(service *ServiceStruct) *HealthServer {
 
 // Start launches the HTTP server in background.
 func (h *HealthServer) Start() {
-	go func() {
-		h.service.frameworkCtx.Logger().Info(context.Background(), "🔎 Health server starting...", map[string]interface{}{
+	h.service.frameworkCtx.Supervisor().Go("health_server", func(ctx context.Context) error {
+		h.service.frameworkCtx.Logger().Info("🔎 Health server starting...", map[string]interface{}{
 			"addr": h.server.Addr,
 		})
 
 		if err := h.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			h.service.frameworkCtx.Logger().Error(context.Background(), "❌ Health server crashed", map[string]interface{}{
+			h.service.frameworkCtx.Logger().Error("❌ Health server crashed", map[string]interface{}{
 				"error": err.Error(),
 			})
+			return err
 		}
-	}()
+		return nil
+	})
 }
 
 // Stop gracefully shuts down the HTTP server.
@@ -61,9 +63,9 @@ func (h *HealthServer) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	h.service.frameworkCtx.Logger().Info(context.Background(), "🛑 Shutting down health server...", nil)
+	h.service.frameworkCtx.Logger().Info("🛑 Shutting down health server...", nil)
 	if err := h.server.Shutdown(ctx); err != nil {
-		h.service.frameworkCtx.Logger().Error(context.Background(), "❌ Health server shutdown error", map[string]interface{}{
+		h.service.frameworkCtx.Logger().Error("❌ Health server shutdown error", map[string]interface{}{
 			"error": err.Error(),
 		})
 	}

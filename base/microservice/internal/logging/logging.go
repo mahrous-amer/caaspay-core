@@ -20,11 +20,13 @@ type Logger struct {
 	redact      bool
 	mu          sync.Mutex
 	tracer      trace.Tracer
+	ctx         context.Context
 }
 
-// NewLogger initializes a logger instance with framework configuration.
-func NewLogger(serviceName string, logLevel string, redact bool) *Logger {
+// NewLogger initializes a logger instance with framework configuration and context.
+func NewLogger(ctx context.Context, serviceName string, logLevel string, redact bool) *Logger {
 	return &Logger{
+		ctx:         ctx,
 		serviceName: serviceName,
 		logLevel:    logLevel,
 		redact:      redact,
@@ -42,8 +44,8 @@ const (
 	LevelFatal = "FATAL"
 )
 
-// LogWithContext logs messages with structured key-value pairs and OpenTelemetry tracing.
-func (l *Logger) LogWithContext(ctx context.Context, level, message string, fields map[string]interface{}) {
+// Log logs messages with structured key-value pairs and OpenTelemetry tracing.
+func (l *Logger) Log(level, message string, fields map[string]interface{}) {
 	if !l.shouldLog(level) {
 		return
 	}
@@ -51,17 +53,14 @@ func (l *Logger) LogWithContext(ctx context.Context, level, message string, fiel
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Extract OpenTelemetry trace info
-	spanCtx := trace.SpanContextFromContext(ctx)
+	spanCtx := trace.SpanContextFromContext(l.ctx)
 	traceID := spanCtx.TraceID().String()
 	spanID := spanCtx.SpanID().String()
 
-	// Apply redaction if needed
 	if l.redact {
 		fields = redactSensitiveData(fields)
 	}
 
-	// Build log entry
 	logEntry := map[string]interface{}{
 		"time":     time.Now().Format(time.RFC3339),
 		"level":    level,
@@ -72,12 +71,10 @@ func (l *Logger) LogWithContext(ctx context.Context, level, message string, fiel
 		"fields":   fields,
 	}
 
-	// Convert log entry to JSON
 	logJSON, _ := json.Marshal(logEntry)
 	fmt.Println(string(logJSON))
 
-	// Send attributes to OpenTelemetry trace
-	if span := trace.SpanFromContext(ctx); span.IsRecording() {
+	if span := trace.SpanFromContext(l.ctx); span.IsRecording() {
 		for key, value := range fields {
 			span.SetAttributes(attribute.String(key, fmt.Sprintf("%v", value)))
 		}
@@ -85,25 +82,30 @@ func (l *Logger) LogWithContext(ctx context.Context, level, message string, fiel
 }
 
 // Info logs informational messages.
-func (l *Logger) Info(ctx context.Context, message string, fields map[string]interface{}) {
-	l.LogWithContext(ctx, LevelInfo, message, fields)
+func (l *Logger) Info(message string, fields map[string]interface{}) {
+	l.Log(LevelInfo, message, fields)
 }
 
-// Debug logs debug messages (only if log level is debug).
-func (l *Logger) Debug(ctx context.Context, message string, fields map[string]interface{}) {
+// Debug logs debug messages.
+func (l *Logger) Debug(message string, fields map[string]interface{}) {
 	if l.logLevel == LevelDebug {
-		l.LogWithContext(ctx, LevelDebug, message, fields)
+		l.Log(LevelDebug, message, fields)
 	}
 }
 
+// Warn logs warning messages.
+func (l *Logger) Warn(message string, fields map[string]interface{}) {
+	l.Log(LevelWarn, message, fields)
+}
+
 // Error logs error messages.
-func (l *Logger) Error(ctx context.Context, message string, fields map[string]interface{}) {
-	l.LogWithContext(ctx, LevelError, message, fields)
+func (l *Logger) Error(message string, fields map[string]interface{}) {
+	l.Log(LevelError, message, fields)
 }
 
 // Fatal logs fatal errors and exits.
-func (l *Logger) Fatal(ctx context.Context, message string, fields map[string]interface{}) {
-	l.LogWithContext(ctx, LevelFatal, message, fields)
+func (l *Logger) Fatal(message string, fields map[string]interface{}) {
+	l.Log(LevelFatal, message, fields)
 	os.Exit(1)
 }
 
@@ -124,7 +126,6 @@ func (l *Logger) shouldLog(level string) bool {
 	return targetLevel >= currentLevel
 }
 
-// isSensitiveKey checks if a key should be redacted.
 func isSensitiveKey(key string) bool {
 	sensitiveKeywords := []string{"password", "secret", "token", "apikey"}
 	for _, keyword := range sensitiveKeywords {
@@ -135,7 +136,6 @@ func isSensitiveKey(key string) bool {
 	return false
 }
 
-// redactSensitiveData replaces sensitive values with a placeholder.
 func redactSensitiveData(data map[string]interface{}) map[string]interface{} {
 	redacted := make(map[string]interface{})
 	for key, value := range data {

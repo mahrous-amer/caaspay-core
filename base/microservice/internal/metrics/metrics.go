@@ -25,15 +25,16 @@ var (
 
 // Metrics manages monitoring for services.
 type Metrics struct {
-	ServiceName string
+	serviceName string
 	cfg         *config.ObservabilityConfig
+	ctx         context.Context
 }
 
 // NewMetrics initializes OpenTelemetry with Prometheus and DataDog based on config.
-func NewMetrics(serviceName string, cfg *config.ObservabilityConfig) (*Metrics, error) {
+func NewMetrics(ctx context.Context, serviceName string, cfg *config.ObservabilityConfig) (*Metrics, error) {
 	if !cfg.TracingEnabled {
 		log.Println("📉 Metrics disabled in configuration")
-		return &Metrics{}, nil
+		return &Metrics{ctx: ctx}, nil
 	}
 
 	if cfg.MetricsAdapter == "prometheus" || cfg.MetricsAdapter == "both" {
@@ -57,12 +58,13 @@ func NewMetrics(serviceName string, cfg *config.ObservabilityConfig) (*Metrics, 
 
 	log.Println("✅ Metrics successfully initialized")
 	return &Metrics{
-		ServiceName: serviceName,
+		serviceName: serviceName,
 		cfg:         cfg,
+		ctx:         ctx,
 	}, nil
 }
 
-// setupPrometheus configures Prometheus metrics exporter
+// setupPrometheus configures Prometheus metrics exporter.
 func setupPrometheus(cfg *config.ObservabilityConfig) error {
 	exporter, err := prometheus.New()
 	if err != nil {
@@ -71,13 +73,10 @@ func setupPrometheus(cfg *config.ObservabilityConfig) error {
 
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	otel.SetMeterProvider(provider)
-
-	// Prometheus server is handled in service/health_server.go if needed.
-
 	return nil
 }
 
-// setupDataDog configures DataDog metrics and tracing
+// setupDataDog configures DataDog metrics and tracing.
 func setupDataDog(cfg *config.ObservabilityConfig) {
 	tracer.Start(
 		tracer.WithService(cfg.MetricsHost),
@@ -86,34 +85,38 @@ func setupDataDog(cfg *config.ObservabilityConfig) {
 	log.Printf("📡 DataDog metrics enabled at %s\n", cfg.MetricsHost)
 }
 
-// Increment increases request count.
-func (m *Metrics) Increment(ctx context.Context, metricName string) {
-	span, _ := tracer.StartSpanFromContext(ctx, metricName)
+// Increment increases request count (default 1 unless delta provided).
+func (m *Metrics) Increment(metricName string, delta ...int64) {
+	d := int64(1)
+	if len(delta) > 0 {
+		d = delta[0]
+	}
+	span, _ := tracer.StartSpanFromContext(m.ctx, metricName)
 	defer span.Finish()
 
-	requests.Add(ctx, 1)
+	requests.Add(m.ctx, d)
 }
 
 // RecordLatency measures request duration.
-func (m *Metrics) RecordLatency(ctx context.Context, duration time.Duration) {
-	latency.Record(ctx, duration.Seconds())
+func (m *Metrics) RecordLatency(duration time.Duration) {
+	latency.Record(m.ctx, duration.Seconds())
 }
 
-// RecordTiming records the duration of an operation.
-func (m *Metrics) RecordTiming(ctx context.Context, operation string, duration time.Duration) {
-	latency.Record(ctx, duration.Seconds(), metric.WithAttributes(
+// RecordTiming records the duration of an operation with tagging.
+func (m *Metrics) RecordTiming(operation string, duration time.Duration) {
+	latency.Record(m.ctx, duration.Seconds(), metric.WithAttributes(
 		attribute.String("operation", operation),
 	))
 }
 
 // IncrementError tracks failed requests.
-func (m *Metrics) IncrementError(ctx context.Context) {
-	errorCounter.Add(ctx, 1)
+func (m *Metrics) IncrementError() {
+	errorCounter.Add(m.ctx, 1)
 }
 
-// TrackActiveRequests maintains active request count.
-func (m *Metrics) TrackActiveRequests(ctx context.Context, delta int64) {
-	activeReqs.Add(ctx, delta)
+// TrackActiveRequests adjusts the active request count.
+func (m *Metrics) TrackActiveRequests(delta int64) {
+	activeReqs.Add(m.ctx, delta)
 }
 
 // Shutdown cleans up DataDog tracing.

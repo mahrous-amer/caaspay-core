@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"sync"
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/transport"
@@ -16,9 +15,7 @@ import (
 type ServiceStruct struct {
 	frameworkCtx    api.FrameworkContextInterface
 	serviceInstance api.ServiceInterface
-	shutdownCh      chan struct{}
-	doneCh          chan struct{}
-	wg              sync.WaitGroup
+	supervisor      api.SupervisorInterface
 	healthServer    *HealthServer
 	lifecycle       *ServiceLifecycle
 }
@@ -32,25 +29,19 @@ func NewServiceStruct(fwCtx api.FrameworkContextInterface, serviceInstance api.S
 	return &ServiceStruct{
 		frameworkCtx:    fwCtx,
 		serviceInstance: serviceInstance,
-		shutdownCh:      make(chan struct{}),
-		doneCh:          make(chan struct{}),
+		supervisor:      fwCtx.Supervisor(),
 		lifecycle:       NewServiceLifecycle(),
 	}, nil
 }
 
 // Run starts the service and its lifecycle.
 func (s *ServiceStruct) Run() {
-	defer close(s.doneCh)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	s.frameworkCtx.Logger().Info(ctx, "Starting service", map[string]interface{}{
+	s.frameworkCtx.Logger().Info("Starting service", map[string]interface{}{
 		"name": s.frameworkCtx.ServiceName(),
 	})
 
 	s.autoRegisterFunctions(s.serviceInstance)
-
 	s.lifecycle.MarkStarted()
 
 	if s.frameworkCtx.Config().Framework.HealthCheck.HTTPServerEnabled {
@@ -58,65 +49,54 @@ func (s *ServiceStruct) Run() {
 		s.healthServer.Start()
 	}
 
-	if svc, ok := s.serviceInstance.(api.ServiceInterface); ok {
-		if err := svc.Start(ctx); err != nil {
-			s.frameworkCtx.Logger().Error(ctx, "❌ Service Start failed", map[string]interface{}{"error": err.Error()})
-			return
-		}
-
-		if err := svc.HealthCheck(ctx); err != nil {
-			s.frameworkCtx.Logger().Error(ctx, "❌ HealthCheck failed", map[string]interface{}{"error": err.Error()})
-			return
-		}
+	if err := s.serviceInstance.Start(); err != nil {
+		s.frameworkCtx.Logger().Error("❌ Service Start failed", map[string]interface{}{"error": err.Error()})
+		return
+	}
+	if err := s.serviceInstance.HealthCheck(); err != nil {
+		s.frameworkCtx.Logger().Error("❌ HealthCheck failed", map[string]interface{}{"error": err.Error()})
+		return
 	}
 
 	s.lifecycle.MarkReady()
-	s.frameworkCtx.Logger().Info(ctx, "✅ Service marked as ready", nil)
+	s.frameworkCtx.Logger().Info("✅ Service marked as ready", nil)
 
-	<-s.shutdownCh
-	cancel()
+	// Launch the supervisor's shutdown watcher
 
-	s.frameworkCtx.Logger().Info(ctx, "🛑 Shutting down service...", map[string]interface{}{
-		"name": s.frameworkCtx.ServiceName(),
-	})
+	//go s.supervisor.WaitAndShutdown(func() {
+	//	s.Shutdown()
+	//})
 
-	if svc, ok := s.serviceInstance.(api.ServiceInterface); ok {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer stopCancel()
-		if err := svc.Stop(stopCtx); err != nil {
-			s.frameworkCtx.Logger().Error(ctx, "❌ Service Stop failed", map[string]interface{}{"error": err.Error()})
-		}
-	}
+	// Block until all supervised goroutines finish
+	//<-s.supervisor.Done()
+	// ✅ Block until shutdown requested via fwCtx.Context
+	<-s.frameworkCtx.Context().Done()
 
-	waitDone := make(chan struct{})
-	go func() {
-		defer close(waitDone)
-		s.wg.Wait()
-	}()
-
-	select {
-	case <-waitDone:
-		s.frameworkCtx.Logger().Info(ctx, "✅ Shutdown complete", nil)
-	case <-time.After(20 * time.Second):
-		s.frameworkCtx.Logger().Error(ctx, "❌ Shutdown timed out", nil)
-	}
+	s.frameworkCtx.Logger().Info("🛑 Service.Run exiting due to context cancellation", nil)
 }
 
 // Shutdown gracefully signals the service to stop.
 func (s *ServiceStruct) Shutdown() {
+  s.frameworkCtx.Logger().Info("Service shutting down",nil)
 	if s.healthServer != nil {
 		s.healthServer.Stop()
 	}
+
 	s.lifecycle.MarkShutdown()
-	select {
-	case <-s.shutdownCh:
-	default:
-		close(s.shutdownCh)
+	s.supervisor.Shutdown()
+
+	// Wait for all supervised goroutines to finish
+	//<-s.supervisor.Done()
+
+	s.supervisor.StopAll()
+
+	if err := s.serviceInstance.Stop(); err != nil {
+		s.frameworkCtx.Logger().Error("❌ Service Stop failed", map[string]interface{}{"error": err.Error()})
 	}
 }
 
 func (s *ServiceStruct) Done() <-chan struct{} {
-	return s.doneCh
+	return s.supervisor.Done()
 }
 
 func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
@@ -133,7 +113,7 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 			method.Type.In(1).String() == "context.Context" &&
 			hasPrefix(methodName, "RPC_"):
 			stream := trimPrefix(methodName, "RPC_")
-			s.frameworkCtx.Logger().Info(context.Background(), "🔌 Registering RPC", map[string]interface{}{"method": methodName, "stream": stream})
+			s.frameworkCtx.Logger().Info("🔌 Registering RPC", map[string]interface{}{"method": methodName, "stream": stream})
 			s.registerRPCMethod(stream, methodValue, method.Type)
 		case method.Type.NumIn() == 2 && method.Type.In(0).String() == "context.Context" && hasPrefix(methodName, "Emitter_"):
 			stream := trimPrefix(methodName, "Emitter_")
@@ -160,35 +140,39 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 	argType := methodType.In(1)
 	retErrType := methodType.Out(1)
 	if retErrType != reflect.TypeOf((*error)(nil)).Elem() {
-		s.frameworkCtx.Logger().Error(context.Background(), "Invalid RPC signature", map[string]interface{}{"method": method.String()})
+		s.frameworkCtx.Logger().Error("Invalid RPC signature", map[string]interface{}{
+			"method": method.String(),
+		})
 		return
 	}
 
-	handler := func(ctx context.Context, raw []byte) ([]byte, error) {
+	handler := func(raw []byte) ([]byte, error) {
 		start := time.Now()
-		s.frameworkCtx.Metrics().Increment(ctx, "rpc_request")
-		defer s.frameworkCtx.Metrics().RecordTiming(ctx, "rpc_request_time", time.Since(start))
-		defer s.frameworkCtx.Compliance().TrackEvent(ctx, "rpc_request")
+
+		s.frameworkCtx.Metrics().Increment("rpc_request")
+		defer s.frameworkCtx.Metrics().RecordTiming("rpc_request_time", time.Since(start))
+		defer s.frameworkCtx.Compliance().TrackEvent("rpc_request")
 
 		var msg transport.TransportMessage
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			s.frameworkCtx.Logger().Error(ctx, "Failed to decode TransportMessage", map[string]interface{}{"error": err.Error()})
+			s.frameworkCtx.Logger().Error("Failed to decode TransportMessage", map[string]interface{}{"error": err.Error()})
 			return nil, err
 		}
 
 		argPtr := reflect.New(argType)
 		if err := json.Unmarshal(msg.Args, argPtr.Interface()); err != nil {
-			s.frameworkCtx.Logger().Error(ctx, "Failed to unmarshal args", map[string]interface{}{"error": err.Error()})
+			s.frameworkCtx.Logger().Error("Failed to unmarshal args", map[string]interface{}{"error": err.Error()})
 			return nil, err
 		}
 
 		if validator := s.frameworkCtx.Validator(); validator != nil {
 			if err := validator.ValidateStruct(argPtr.Interface()); err != nil {
-				s.frameworkCtx.Logger().Error(ctx, "Validation failed", map[string]interface{}{"error": err.Error()})
+				s.frameworkCtx.Logger().Error("Validation failed", map[string]interface{}{"error": err.Error()})
 				return nil, err
 			}
 		}
 
+		ctx := s.frameworkCtx.Context()
 		results := method.Call([]reflect.Value{reflect.ValueOf(ctx), argPtr.Elem()})
 		if errVal := results[1]; !errVal.IsNil() {
 			return nil, errVal.Interface().(error)
@@ -204,91 +188,105 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 			reply.MessageID = msg.MessageID
 			reply.Trace = msg.Trace
 			reply.Stash = msg.Stash
-			if replyBytes, err := json.Marshal(reply); err == nil {
-				if err := s.frameworkCtx.Transport().Publish(ctx, msg.ReplyTo, replyBytes); err != nil {
-					s.frameworkCtx.Logger().Error(ctx, "Failed to publish RPC reply", map[string]interface{}{"error": err.Error()})
-				}
+
+			replyBytes, err := json.Marshal(reply)
+			if err != nil {
+				s.frameworkCtx.Logger().Error("Failed to encode RPC reply", map[string]interface{}{"error": err.Error()})
+				return nil, err
+			}
+
+			if err := s.frameworkCtx.Transport().Publish(msg.ReplyTo, replyBytes); err != nil {
+				s.frameworkCtx.Logger().Error("Failed to publish RPC reply", map[string]interface{}{"error": err.Error()})
 			}
 		}
+
 		return nil, nil
 	}
 
-	s.frameworkCtx.Transport().Subscribe(stream, handler)
+	s.frameworkCtx.Supervisor().Go("rpc_"+stream, func(_ context.Context) error {
+		if err := s.frameworkCtx.Transport().Subscribe(stream, handler); err != nil {
+			s.frameworkCtx.Logger().Error("Failed to subscribe to RPC stream", map[string]interface{}{
+				"stream": stream,
+				"error":  err.Error(),
+			})
+			return err
+		}
+		return nil
+	})
 }
 
 // registerReceiver registers a method to handle incoming messages.
 func (s *ServiceStruct) registerReceiver(stream string, batchSize int, method reflect.Value) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		batch := make([]*transport.TransportMessage, 0, batchSize)
+	batch := make([]*transport.TransportMessage, 0, batchSize)
 
-		handler := func(ctx context.Context, raw []byte) ([]byte, error) {
-			msg := &transport.TransportMessage{}
-			if err := json.Unmarshal(raw, msg); err != nil {
-				s.frameworkCtx.Logger().Error(ctx, "Receiver: failed to unmarshal message", map[string]interface{}{
-					"stream": stream,
-					"error":  err.Error(),
-				})
-				return nil, err
-			}
-			batch = append(batch, msg)
+	handler := func(raw []byte) ([]byte, error) {
+		ctx := s.frameworkCtx.Context()
 
-			if len(batch) >= batchSize {
-				args := []reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(batch)}
-				start := time.Now()
-
-				results := method.Call(args)
-
-				batch = batch[:0]
-
-				if len(results) > 0 && !results[len(results)-1].IsNil() {
-					s.frameworkCtx.Logger().Error(ctx, "Receiver error", map[string]interface{}{
-						"stream": stream,
-						"error":  results[len(results)-1].Interface().(error).Error(),
-					})
-					return nil, results[len(results)-1].Interface().(error)
-				}
-
-				s.frameworkCtx.Metrics().Increment(ctx, "receiver_handled")
-				s.frameworkCtx.Metrics().RecordTiming(ctx, "receiver_handling_time", time.Since(start))
-				s.frameworkCtx.Compliance().TrackEvent(ctx, "receiver_message")
-			}
-			return nil, nil
-		}
-
-		if err := s.frameworkCtx.Transport().Subscribe(stream, handler); err != nil {
-			s.frameworkCtx.Logger().Error(context.Background(), "Failed to subscribe to stream", map[string]interface{}{
+		msg := &transport.TransportMessage{}
+		if err := json.Unmarshal(raw, msg); err != nil {
+			s.frameworkCtx.Logger().Error("Receiver: failed to unmarshal message", map[string]interface{}{
 				"stream": stream,
 				"error":  err.Error(),
 			})
+			return nil, err
 		}
-	}()
+
+		batch = append(batch, msg)
+
+		if len(batch) < batchSize {
+			return nil, nil
+		}
+
+		start := time.Now()
+		args := []reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(batch)}
+
+		results := method.Call(args)
+		batch = batch[:0] // Clear the batch
+
+		if len(results) > 0 && !results[len(results)-1].IsNil() {
+			s.frameworkCtx.Logger().Error("Receiver error", map[string]interface{}{
+				"stream": stream,
+				"error":  results[len(results)-1].Interface().(error).Error(),
+			})
+			return nil, results[len(results)-1].Interface().(error)
+		}
+
+		s.frameworkCtx.Metrics().Increment("receiver_handled")
+		s.frameworkCtx.Metrics().RecordTiming("receiver_handling_time", time.Since(start))
+		s.frameworkCtx.Compliance().TrackEvent("receiver_message")
+
+		return nil, nil
+	}
+
+	s.frameworkCtx.Supervisor().Go("receiver_"+stream, func(ctx context.Context) error {
+		if err := s.frameworkCtx.Transport().Subscribe(stream, handler); err != nil {
+			s.frameworkCtx.Logger().Error("Failed to subscribe to stream", map[string]interface{}{
+				"stream": stream,
+				"error":  err.Error(),
+			})
+			return err
+		}
+		return nil
+	})
 }
 
 // registerEmitterPull registers a method to be called periodically.
 func (s *ServiceStruct) registerEmitterPull(stream string, interval time.Duration, method reflect.Value) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
+	s.frameworkCtx.Supervisor().Go("emitter_pull_"+stream, func(ctx context.Context) error {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
 			select {
-			case <-s.shutdownCh:
-				return
+			case <-ctx.Done():
+				return nil
 			case <-ticker.C:
-				args := []reflect.Value{reflect.ValueOf(ctx)}
 				start := time.Now()
-
+				args := []reflect.Value{reflect.ValueOf(ctx)}
 				results := method.Call(args)
 
 				if len(results) > 0 && !results[len(results)-1].IsNil() {
-					s.frameworkCtx.Logger().Error(ctx, "Emitter pull error", map[string]interface{}{
+					s.frameworkCtx.Logger().Error("Emitter pull error", map[string]interface{}{
 						"stream": stream,
 						"error":  results[len(results)-1].Interface().(error).Error(),
 					})
@@ -303,57 +301,51 @@ func (s *ServiceStruct) registerEmitterPull(stream string, interval time.Duratio
 
 						encoded, err := tmsg.Encode()
 						if err != nil {
-							s.frameworkCtx.Logger().Error(ctx, "Failed to marshal transport message", map[string]interface{}{
+							s.frameworkCtx.Logger().Error("Failed to marshal transport message", map[string]interface{}{
 								"stream": stream,
 								"error":  err.Error(),
 							})
 							continue
 						}
 
-						s.frameworkCtx.Metrics().Increment(ctx, "emitter_pulled")
-						s.frameworkCtx.Metrics().RecordTiming(ctx, "emitter_pulling_time", time.Since(start))
-						s.frameworkCtx.Compliance().TrackEvent(ctx, "emitter_pull")
+						s.frameworkCtx.Metrics().Increment("emitter_pulled")
+						s.frameworkCtx.Metrics().RecordTiming("emitter_pulling_time", time.Since(start))
+						s.frameworkCtx.Compliance().TrackEvent("emitter_pull")
 
-						if err := s.frameworkCtx.Transport().Publish(ctx, stream, encoded); err != nil {
-							s.frameworkCtx.Logger().Error(ctx, "Failed to publish message", map[string]interface{}{
+						if err := s.frameworkCtx.Transport().Publish(stream, encoded); err != nil {
+							s.frameworkCtx.Logger().Error("Failed to publish message", map[string]interface{}{
 								"stream": stream,
 								"error":  err.Error(),
 							})
 						}
 					} else {
-						s.frameworkCtx.Logger().Error(ctx, "Emitter pull returned non-json.RawMessage value", map[string]interface{}{
+						s.frameworkCtx.Logger().Error("Emitter pull returned non-json.RawMessage value", map[string]interface{}{
 							"stream": stream,
 						})
 					}
 				}
 			}
 		}
-	}()
+	})
 }
 
 // registerEmitterPoll registers a method to be called periodically and publishes all returned messages.
 func (s *ServiceStruct) registerEmitterPoll(stream string, interval time.Duration, method reflect.Value) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
+	s.frameworkCtx.Supervisor().Go("emitter_poll_"+stream, func(ctx context.Context) error {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
 			select {
-			case <-s.shutdownCh:
-				return
+			case <-ctx.Done():
+				return nil
 			case <-ticker.C:
-				args := []reflect.Value{reflect.ValueOf(ctx)}
 				start := time.Now()
-
+				args := []reflect.Value{reflect.ValueOf(ctx)}
 				results := method.Call(args)
 
 				if len(results) > 0 && !results[len(results)-1].IsNil() {
-					s.frameworkCtx.Logger().Error(ctx, "Emitter poll error", map[string]interface{}{
+					s.frameworkCtx.Logger().Error("Emitter poll error", map[string]interface{}{
 						"stream": stream,
 						"error":  results[len(results)-1].Interface().(error).Error(),
 					})
@@ -363,7 +355,9 @@ func (s *ServiceStruct) registerEmitterPoll(stream string, interval time.Duratio
 				if len(results) > 0 {
 					items, ok := results[0].Interface().([][]byte)
 					if !ok {
-						s.frameworkCtx.Logger().Error(ctx, "Emitter poll returned unexpected type", nil)
+						s.frameworkCtx.Logger().Error("Emitter poll returned unexpected type", map[string]interface{}{
+							"stream": stream,
+						})
 						continue
 					}
 
@@ -374,18 +368,18 @@ func (s *ServiceStruct) registerEmitterPoll(stream string, interval time.Duratio
 
 						encoded, err := json.Marshal(msg)
 						if err != nil {
-							s.frameworkCtx.Logger().Error(ctx, "Failed to encode message", map[string]interface{}{
+							s.frameworkCtx.Logger().Error("Failed to encode message", map[string]interface{}{
 								"error": err.Error(),
 							})
 							continue
 						}
 
-						s.frameworkCtx.Metrics().Increment(ctx, "emitter_polled")
-						s.frameworkCtx.Metrics().RecordTiming(ctx, "emitter_polling_time", time.Since(start))
-						s.frameworkCtx.Compliance().TrackEvent(ctx, "emitter_poll")
+						s.frameworkCtx.Metrics().Increment("emitter_polled")
+						s.frameworkCtx.Metrics().RecordTiming("emitter_polling_time", time.Since(start))
+						s.frameworkCtx.Compliance().TrackEvent("emitter_poll")
 
-						if err := s.frameworkCtx.Transport().Publish(ctx, stream, encoded); err != nil {
-							s.frameworkCtx.Logger().Error(ctx, "Failed to publish emitter message", map[string]interface{}{
+						if err := s.frameworkCtx.Transport().Publish(stream, encoded); err != nil {
+							s.frameworkCtx.Logger().Error("Failed to publish emitter message", map[string]interface{}{
 								"stream": stream,
 								"error":  err.Error(),
 							})
@@ -394,5 +388,5 @@ func (s *ServiceStruct) registerEmitterPoll(stream string, interval time.Duratio
 				}
 			}
 		}
-	}()
+	})
 }

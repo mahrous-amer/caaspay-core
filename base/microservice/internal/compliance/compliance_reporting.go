@@ -3,45 +3,56 @@ package compliance
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/config"
+	"github.com/caaspay/caaspay-core/internal/logging"
 	"github.com/caaspay/caaspay-core/internal/metrics"
 	"github.com/caaspay/caaspay-core/internal/tracing"
 )
 
-// ComplianceReporter now includes configuration flags and additional context.
+// ComplianceReporter handles compliance event tracking and metrics.
 type ComplianceReporter struct {
+	ctx         context.Context
+	log         *logging.Logger
 	metrics     *metrics.Metrics
+	tracer      *tracing.TracerManager
 	enabled     bool
 	appName     string
 	environment string
 }
 
 // NewComplianceReporter initializes compliance tracking using config settings.
-func NewComplianceReporter(cfg *config.Config, metrics *metrics.Metrics) *ComplianceReporter {
+func NewComplianceReporter(ctx context.Context, cfg *config.Config, log *logging.Logger, metrics *metrics.Metrics, tracer *tracing.TracerManager) *ComplianceReporter {
 	return &ComplianceReporter{
+		ctx:         ctx,
+		log:         log,
 		metrics:     metrics,
-		enabled:     cfg.ComplianceEnabled, // e.g., set in your config
+		tracer:      tracer,
+		enabled:     cfg.ComplianceEnabled,
 		appName:     cfg.AppName,
 		environment: cfg.Env,
 	}
 }
 
 // TrackEvent logs a compliance event along with tracing and metrics.
-func (cr *ComplianceReporter) TrackEvent(ctx context.Context, eventName string) {
+func (cr *ComplianceReporter) TrackEvent(eventName string) {
 	if !cr.enabled {
 		return
 	}
-	// Start a trace span for the event.
-	_, span := tracing.StartSpan(ctx, eventName)
+
+	_, span := cr.tracer.StartSpan(eventName)
 	defer span.End()
 
-	log.Printf("🔍 Compliance Event: %s | TraceID=%s | App=%s | Env=%s",
-		eventName, span.SpanContext().TraceID(), cr.appName, cr.environment)
+	cr.log.Info("🔍 Compliance Event", map[string]interface{}{
+		"event":   eventName,
+		"traceID": span.SpanContext().TraceID().String(),
+		"app":     cr.appName,
+		"env":     cr.environment,
+	})
 
-	cr.metrics.Increment(ctx, eventName)
+	cr.metrics.Increment(eventName)
+	cr.metrics.RecordTiming(eventName, 1*time.Millisecond) // Default 1ms for event-based metrics
 }
 
 // ComplianceChecker verifies that PCI and license compliance rules are met.
@@ -59,24 +70,19 @@ func NewComplianceChecker(cfg *config.Config, reporter *ComplianceReporter) *Com
 }
 
 // ValidatePCICompliance performs checks to ensure PCI compliance.
-func (cc *ComplianceChecker) ValidatePCICompliance(ctx context.Context) error {
+func (cc *ComplianceChecker) ValidatePCICompliance() error {
 	start := time.Now()
 
-	// Example check: ensure PCI-related configuration is enabled.
 	if !cc.cfg.PCIEnabled {
 		return fmt.Errorf("PCI compliance not enabled")
 	}
-	// Example check: verify that an encryption key is configured.
 	if cc.cfg.EncryptionKey == "" {
 		return fmt.Errorf("encryption key not configured")
 	}
-	// ... Add more checks as needed (audit logging, access controls, etc.)
 
-	// Record the time taken for this compliance check.
 	duration := time.Since(start)
-	cc.reporter.metrics.RecordTiming(ctx, "compliance.pci_check_duration", duration)
+	cc.reporter.metrics.RecordTiming("compliance.pci_check_duration", duration)
+	cc.reporter.TrackEvent("compliance.pci_validated")
 
-	// Log a successful compliance validation.
-	cc.reporter.TrackEvent(ctx, "compliance.pci_validated")
 	return nil
 }
