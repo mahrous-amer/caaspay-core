@@ -67,12 +67,12 @@ func (s *Supervisor) WaitAndShutdown(onShutdown func()) {
 		// an error-triggered shutdown
 	}
 
+	onShutdown() // ✅ must always run regardless of reason
 	s.logger.Info("📋 Waiting for goroutines to finish:", nil)
 	s.active.Range(func(key, value any) bool {
 		s.logger.Info("🕒 Still active:", map[string]interface{}{"name": key})
 		return true
 	})
-	onShutdown() // ✅ must always run regardless of reason
 	s.wg.Wait()
 
 	s.once.Do(func() {

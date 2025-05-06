@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -50,7 +49,6 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	fwCtx.Logger().Info("⏳ Waiting for any signal to shutdown...", nil)
-	var shutdownOnce sync.Once
 
 	fwCtx.Supervisor().Go("signal.handler", func(ctx context.Context) error {
 		select {
@@ -61,32 +59,33 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 			return nil
 		}
 
-		shutdownOnce.Do(func() {
-			fwCtx.Logger().Info("🛑 Initiating graceful shutdown...", nil)
-			svcStruct.Shutdown()
-		})
+		fwCtx.Logger().Info("🛑 Initiating graceful shutdown...", nil)
+		svcStruct.Shutdown()
 
 		return nil
 	})
 
 	// Step 7: Wait for shutdown and exit
 	fwCtx.Supervisor().WaitAndShutdown(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
 
-		shutdownOnce.Do(func() {
-			fwCtx.Logger().Info("⏳ Performing shutdown...", nil)
-			svcStruct.Shutdown()
-		})
+		fwCtx.Logger().Info("⏳ Last wait for shuting down...", nil)
+		// to prevent framework from getting stuck
+		// perform this in a dedicated goroutine
+		// let it finish, and have the last confirmation that everything is done.
+		// typically won't even execute if everything shutdowns gracefully
+		go func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
-		fwCtx.Logger().Info("⏳ Waiting for service.Done() or shutdown timeout...", nil)
-		select {
-		case <-svcStruct.Done():
-			fwCtx.Logger().Info("✅ Service stopped gracefully", nil)
-		case <-shutdownCtx.Done():
-			fwCtx.Logger().Error("❌ Shutdown timed out. Forcing exit.", nil)
-			os.Exit(1)
-		}
+			fwCtx.Logger().Info("⏳ Waiting for service.Done() or shutdown timeout...", nil)
+			select {
+			case <-fwCtx.Supervisor().Done():
+				fwCtx.Logger().Info("✅ Service stopped gracefully", nil)
+			case <-shutdownCtx.Done():
+				fwCtx.Logger().Error("❌ Shutdown timed out. Forcing exit.", nil)
+				os.Exit(1)
+			}
+		}()
 	})
 
 	fwCtx.Logger().Info("🏁 Bootstrap shutdown complete", nil)

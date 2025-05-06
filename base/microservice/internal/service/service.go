@@ -41,7 +41,7 @@ func (s *ServiceStruct) Run() {
 		"name": s.frameworkCtx.ServiceName(),
 	})
 
-	s.autoRegisterFunctions(s.serviceInstance)
+	//s.autoRegisterFunctions(s.serviceInstance)
 	s.lifecycle.MarkStarted()
 
 	if s.frameworkCtx.Config().Framework.HealthCheck.HTTPServerEnabled {
@@ -61,15 +61,10 @@ func (s *ServiceStruct) Run() {
 	s.lifecycle.MarkReady()
 	s.frameworkCtx.Logger().Info("✅ Service marked as ready", nil)
 
-	// Launch the supervisor's shutdown watcher
-
-	//go s.supervisor.WaitAndShutdown(func() {
-	//	s.Shutdown()
-	//})
-
 	// Block until all supervised goroutines finish
-	//<-s.supervisor.Done()
-	// ✅ Block until shutdown requested via fwCtx.Context
+	// <-s.supervisor.Done()
+	// waiting on supervisor here will cause a deadlock.
+	// Block until shutdown requested via fwCtx.Context
 	<-s.frameworkCtx.Context().Done()
 
 	s.frameworkCtx.Logger().Info("🛑 Service.Run exiting due to context cancellation", nil)
@@ -77,7 +72,12 @@ func (s *ServiceStruct) Run() {
 
 // Shutdown gracefully signals the service to stop.
 func (s *ServiceStruct) Shutdown() {
-  s.frameworkCtx.Logger().Info("Service shutting down",nil)
+	// call service stop first
+	if err := s.serviceInstance.Stop(); err != nil {
+		s.frameworkCtx.Logger().Error("❌ Service Stop failed", map[string]interface{}{"error": err.Error()})
+	}
+
+	s.frameworkCtx.Logger().Info("Service shutting down", nil)
 	if s.healthServer != nil {
 		s.healthServer.Stop()
 	}
@@ -87,12 +87,8 @@ func (s *ServiceStruct) Shutdown() {
 
 	// Wait for all supervised goroutines to finish
 	//<-s.supervisor.Done()
+	//s.supervisor.StopAll()
 
-	s.supervisor.StopAll()
-
-	if err := s.serviceInstance.Stop(); err != nil {
-		s.frameworkCtx.Logger().Error("❌ Service Stop failed", map[string]interface{}{"error": err.Error()})
-	}
 }
 
 func (s *ServiceStruct) Done() <-chan struct{} {
