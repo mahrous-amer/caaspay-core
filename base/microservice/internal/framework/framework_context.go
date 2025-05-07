@@ -2,6 +2,7 @@ package framework
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -58,15 +59,17 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 	supervisorInstance := supervisor.NewSupervisor(ctx, cancel, logger)
 
 	redisCfg := transport.RedisTransportConfig{
-		RedisAddr:          cfg.Framework.Transport.RedisAddr,
-		UseCompression:     cfg.Framework.Transport.UseCompression,
-		UseEncryption:      cfg.Framework.Transport.UseEncryption,
-		ServiceReplyStream: fmt.Sprintf("%s_reply", cfg.Framework.ServiceName),
-		MaxRetries:         cfg.Framework.Transport.MaxRetries,
-		RetryDelay:         cfg.Framework.Transport.RetryDelay,
-		ReadTimeout:        cfg.Framework.Transport.ReadTimeout,
-		WriteTimeout:       cfg.Framework.Transport.WriteTimeout,
-		StreamReadCount:    cfg.Framework.Transport.StreamReadCount,
+		RedisAddr:               cfg.Framework.Transport.RedisAddr,
+		UseCompression:          cfg.Framework.Transport.UseCompression,
+		UseEncryption:           cfg.Framework.Transport.UseEncryption,
+		EncryptionKey:           cfg.Framework.Transport.EncryptionKey,
+		ServiceReplyStream:      fmt.Sprintf("%s_reply", cfg.Framework.ServiceName),
+		ResponseOnServiceStream: cfg.Framework.Transport.ResponseOnServiceStream,
+		MaxRetries:              cfg.Framework.Transport.MaxRetries,
+		RetryDelay:              cfg.Framework.Transport.RetryDelay,
+		ReadTimeout:             cfg.Framework.Transport.ReadTimeout,
+		WriteTimeout:            cfg.Framework.Transport.WriteTimeout,
+		StreamReadCount:         cfg.Framework.Transport.StreamReadCount,
 	}
 
 	redisTransport, err := transport.NewRedisTransport(
@@ -149,6 +152,24 @@ func (f *FrameworkContext) Context() context.Context             { return f.ctx 
 func (f *FrameworkContext) SetService(s api.ServiceInterface)    { f.service = s }
 func (f *FrameworkContext) Service() api.ServiceInterface        { return f.service }
 
+func (f *FrameworkContext) BuildStreamName(kind api.StreamType, service, method string) string {
+	return transport.BuildStreamName(api.StreamConfig{
+		Type:    kind,
+		Service: service,
+		Method:  method,
+		// Optional: add InstanceID from config if enabled
+		//InstanceID: f.config.Framework.InstanceID,
+	})
+}
+
+func (f *FrameworkContext) BuildRPCStreamName(method string, serviceName ...string) string {
+	service := f.serviceName
+	if len(serviceName) > 0 && serviceName[0] != "" {
+		service = serviceName[0]
+	}
+	return f.BuildStreamName(api.StreamTypeRPC, service, method)
+}
+
 func (f *FrameworkContext) IsHealthy() bool {
 	healthy := true
 
@@ -165,4 +186,37 @@ func (f *FrameworkContext) IsHealthy() bool {
 	}
 
 	return healthy
+}
+
+func (f *FrameworkContext) RequestRPC(stream string, input any, output any, timeout time.Duration) error {
+	if validator := f.Validator(); validator != nil {
+		if err := validator.ValidateStruct(input); err != nil {
+			return fmt.Errorf("input validation failed: %w", err)
+		}
+	}
+
+	rawArgs, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("failed to marshal input: %w", err)
+	}
+
+	msg := api.NewTransportMessage(f.ServiceName(), stream, rawArgs)
+	// msg.Auth = f.AuthContext()
+	// msg.Context = f.RequestContext()
+
+	respBytes, err := f.Transport().Request(stream, msg, timeout)
+	if err != nil {
+		return fmt.Errorf("transport request failed: %w", err)
+	}
+
+	respMsg, err := api.DecodeTransportMessage(respBytes)
+	if err != nil {
+		return fmt.Errorf("failed to decode TransportMessage: %w", err)
+	}
+
+	if err := json.Unmarshal(respMsg.Response, output); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return nil
 }

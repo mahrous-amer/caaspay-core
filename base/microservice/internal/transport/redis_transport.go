@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/logging"
@@ -16,11 +17,12 @@ import (
 
 // RedisTransport implements the Transport interface using Redis Streams.
 type RedisTransport struct {
-	client             redis.Cmdable
-	useCompression     bool
-	useEncryption      bool
-	serviceReplyStream string
-	encryptionKey      []byte
+	client                  redis.Cmdable
+	useCompression          bool
+	useEncryption           bool
+	serviceReplyStream      string
+	responseOnServiceStream bool
+	encryptionKey           []byte
 
 	maxRetries      int
 	retryDelay      time.Duration
@@ -38,22 +40,23 @@ type RedisTransport struct {
 
 // RedisTransportConfig defines the configuration for RedisTransport.
 type RedisTransportConfig struct {
-	RedisAddr          []string      // Redis node addresses (cluster or single-node)
-	UseCluster         bool          // Use redis cluster client
-	TLSRequired        bool          // Use TLS when connecting
-	UseCompression     bool          // Enable compression of message payloads
-	UseEncryption      bool          // Enable encryption of message payloads
-	ServiceReplyStream string        // Stream used for service RPC responses
-	EncryptionKey      string        // Encryption key (AES-GCM)
-	MaxRetries         int           // Max number of retries on failure (default 3)
-	RetryDelay         time.Duration // Delay between retries (default 500ms)
-	DLQStream          string        // Optional: stream name for dead-letter queue
-	PoolSize           int           // Max number of Redis connections
-	MinIdleConns       int           // Minimum idle connections in pool
-	DialTimeout        time.Duration // Timeout for establishing new connections
-	ReadTimeout        time.Duration // Timeout for socket reads
-	WriteTimeout       time.Duration // Timeout for socket writes
-	StreamReadCount    int64         // Number of messages to read from stream at once
+	RedisAddr               []string      // Redis node addresses (cluster or single-node)
+	UseCluster              bool          // Use redis cluster client
+	TLSRequired             bool          // Use TLS when connecting
+	UseCompression          bool          // Enable compression of message payloads
+	UseEncryption           bool          // Enable encryption of message payloads
+	ServiceReplyStream      string        // Stream used for service RPC responses
+	ResponseOnServiceStream bool          // To use Service Stream for RPC responses
+	EncryptionKey           string        // Encryption key (AES-GCM)
+	MaxRetries              int           // Max number of retries on failure (default 3)
+	RetryDelay              time.Duration // Delay between retries (default 500ms)
+	DLQStream               string        // Optional: stream name for dead-letter queue
+	PoolSize                int           // Max number of Redis connections
+	MinIdleConns            int           // Minimum idle connections in pool
+	DialTimeout             time.Duration // Timeout for establishing new connections
+	ReadTimeout             time.Duration // Timeout for socket reads
+	WriteTimeout            time.Duration // Timeout for socket writes
+	StreamReadCount         int64         // Number of messages to read from stream at once
 }
 
 func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *metrics.Metrics, sup api.SupervisorInterface, cfg RedisTransportConfig) (*RedisTransport, error) {
@@ -120,22 +123,23 @@ func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *met
 	}
 
 	rt := &RedisTransport{
-		client:             client,
-		useCompression:     cfg.UseCompression,
-		useEncryption:      cfg.UseEncryption,
-		serviceReplyStream: cfg.ServiceReplyStream,
-		encryptionKey:      []byte(cfg.EncryptionKey),
-		maxRetries:         maxRetries,
-		retryDelay:         retryDelay,
-		dlqStream:          dlqStream,
-		logger:             logger,
-		metrics:            metrics,
-		ctx:                ctx,
-		supervisor:         sup,
-		blockTimeout:       readTimeout,
-		readTimeout:        readTimeout,
-		writeTimeout:       writeTimeout,
-		streamReadCount:    cfg.StreamReadCount,
+		client:                  client,
+		useCompression:          cfg.UseCompression,
+		useEncryption:           cfg.UseEncryption,
+		serviceReplyStream:      cfg.ServiceReplyStream,
+		encryptionKey:           []byte(cfg.EncryptionKey),
+		maxRetries:              maxRetries,
+		retryDelay:              retryDelay,
+		dlqStream:               dlqStream,
+		logger:                  logger,
+		metrics:                 metrics,
+		ctx:                     ctx,
+		supervisor:              sup,
+		blockTimeout:            readTimeout,
+		readTimeout:             readTimeout,
+		writeTimeout:            writeTimeout,
+		streamReadCount:         cfg.StreamReadCount,
+		responseOnServiceStream: cfg.ResponseOnServiceStream,
 	}
 
 	// Check connection once at startup
@@ -200,27 +204,45 @@ func (r *RedisTransport) verifyConnection() error {
 }
 
 // Request sends an RPC request and waits for a response.
-func (r *RedisTransport) Request(stream string, data []byte, timeout time.Duration) ([]byte, error) {
-	replyStream := fmt.Sprintf("reply:%s", uuid.New().String())
+func (r *RedisTransport) Request(stream string, msg *api.TransportMessage, timeout time.Duration) ([]byte, error) {
+	// Ensure ReplyTo is set
+	if msg.ReplyTo == "" {
+		if r.responseOnServiceStream {
+			msg.ReplyTo = r.serviceReplyStream
+		} else {
+			msg.ReplyTo = fmt.Sprintf("reply:%s", uuid.New().String())
+		}
+	}
+
+	// Prepare response channel
 	responseCh := make(chan []byte, 1)
 
+	// Start listener goroutine
 	r.supervisor.Go("redis_listenForReply", func(ctx context.Context) error {
-		r.listenForReply(replyStream, responseCh, timeout)
+		r.listenForReply(msg.MessageID, msg.ReplyTo, responseCh, timeout)
 		return nil
 	})
 
-	encodedData, err := r.prepareData(data)
+	// Encode message
+	msgBytes, err := msg.Encode()
+	if err != nil {
+		r.logger.Error("failed to encode TransportMessage", map[string]interface{}{"error": err.Error()})
+		return nil, err
+	}
+
+	// Encrypt/compress if enabled
+	encodedData, err := r.prepareData(msgBytes)
 	if err != nil {
 		r.logger.Error("prepareData error in Request", map[string]interface{}{"error": err.Error()})
 		return nil, err
 	}
 
+	// Send to Redis stream
 	addOp := func() error {
 		return r.client.XAdd(r.ctx, &redis.XAddArgs{
 			Stream: stream,
 			Values: map[string]interface{}{
-				"body":     encodedData,
-				"reply_to": replyStream,
+				"body": encodedData,
 			},
 		}).Err()
 	}
@@ -232,9 +254,10 @@ func (r *RedisTransport) Request(stream string, data []byte, timeout time.Durati
 
 	r.logger.Info("Sending RPC request", map[string]interface{}{
 		"stream": stream,
-		"size":   len(data),
+		"size":   len(msgBytes),
 	})
 
+	// Wait for reply
 	select {
 	case response := <-responseCh:
 		return response, nil
@@ -243,37 +266,98 @@ func (r *RedisTransport) Request(stream string, data []byte, timeout time.Durati
 	}
 }
 
-func (r *RedisTransport) listenForReply(replyStream string, responseCh chan<- []byte, timeout time.Duration) {
+func (r *RedisTransport) listenForReply(expectedMessageID, replyStream string, responseCh chan<- []byte, timeout time.Duration) {
+	const groupName = "rpc_cg"
+	consumerName := uuid.New().String()
+
 	for {
 		select {
 		case <-r.ctx.Done():
 			r.logger.Info("listenForReply: context canceled", nil)
 			return
 		default:
-			res, err := r.client.XRead(r.ctx, &redis.XReadArgs{
-				Streams: []string{replyStream, "0"},
-				Count:   1,
-				Block:   timeout,
+			// Ensure consumer group exists (MKSTREAM allows stream autocreation)
+			err := r.client.XGroupCreateMkStream(r.ctx, replyStream, groupName, "$").Err()
+			if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
+				r.logger.Error("Failed to create consumer group", map[string]interface{}{
+					"stream": replyStream,
+					"group":  groupName,
+					"error":  err.Error(),
+				})
+				return
+			}
+			res, err := r.client.XReadGroup(r.ctx, &redis.XReadGroupArgs{
+				Group:    groupName,
+				Consumer: consumerName,
+				Streams:  []string{replyStream, ">"},
+				Count:    1,
+				Block:    r.blockTimeout,
 			}).Result()
 			if err != nil {
 				if r.ctx.Err() != nil {
 					return
 				}
-				r.logger.Error("Error reading reply", map[string]interface{}{"error": err.Error()})
+				r.logger.Error("Error reading reply (XREADGROUP)", map[string]interface{}{"error": err.Error()})
 				continue
 			}
+
 			if len(res) > 0 && len(res[0].Messages) > 0 {
 				msg := res[0].Messages[0]
+				messageID := msg.ID
+
 				body, ok := msg.Values["body"].(string)
 				if !ok {
 					r.logger.Error("listenForReply: invalid message format", nil)
 					continue
 				}
+
 				processed, err := r.processData([]byte(body))
 				if err != nil {
 					r.logger.Error("processData error in listenForReply", map[string]interface{}{"error": err.Error()})
+					continue
 				}
+
+				decoded, err := api.DecodeTransportMessage(processed)
+				if err != nil {
+					r.logger.Error("Failed to decode response message", map[string]interface{}{"error": err.Error()})
+					continue
+				}
+
+				if decoded.MessageID != expectedMessageID {
+					r.logger.Warn("Mismatched MessageID in response", map[string]interface{}{
+						"expected": expectedMessageID,
+						"got":      decoded.MessageID,
+					})
+					continue
+				}
+
+				// ✅ Send reply to waiting channel
 				responseCh <- processed
+
+				// ✅ Acknowledge the message
+				if err := r.client.XAck(r.ctx, replyStream, groupName, messageID).Err(); err != nil {
+					r.logger.Warn("Failed to acknowledge reply message", map[string]interface{}{
+						"stream":     replyStream,
+						"group":      groupName,
+						"message_id": messageID,
+						"error":      err.Error(),
+					})
+				}
+
+				// ✅ Clean up the stream if it was temporary
+				if !r.responseOnServiceStream {
+					if err := r.client.Del(r.ctx, replyStream).Err(); err != nil {
+						r.logger.Warn("Failed to delete temporary reply stream", map[string]interface{}{
+							"stream": replyStream,
+							"error":  err.Error(),
+						})
+					} else {
+						r.logger.Info("Deleted temporary reply stream", map[string]interface{}{
+							"stream": replyStream,
+						})
+					}
+				}
+
 				return
 			}
 		}

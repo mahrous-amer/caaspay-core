@@ -10,6 +10,7 @@ import (
 // BuildStreamName generates a canonical stream name:
 // Format: <type>:<service>:<method>[:<instanceID>]
 func BuildStreamName(cfg api.StreamConfig) string {
+	cfg.Normalize()
 	base := fmt.Sprintf("%s:%s", cfg.Service, cfg.Method)
 	if cfg.InstanceID != "" {
 		return fmt.Sprintf("%s:%s:%s", cfg.Type, base, cfg.InstanceID)
@@ -36,6 +37,7 @@ func ParseStreamName(stream string) (*api.StreamConfig, error) {
 		cfg.InstanceID = parts[3]
 	}
 
+	cfg.Normalize()
 	return cfg, nil
 }
 

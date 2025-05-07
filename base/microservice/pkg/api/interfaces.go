@@ -87,12 +87,15 @@ type FrameworkContextInterface interface {
 	Service() ServiceInterface
 	SetService(s ServiceInterface)
 	Supervisor() SupervisorInterface
+	BuildStreamName(kind StreamType, service, method string) string
+	BuildRPCStreamName(method string, serviceName ...string) string
+	RequestRPC(stream string, input any, output any, timeout time.Duration) error
 }
 
 // TransportInterface defines the messaging transport interface for pluggable broker backends.
 type TransportInterface interface {
 	Publish(stream string, data []byte) error
-	Request(stream string, data []byte, timeout time.Duration) ([]byte, error)
+	Request(stream string, msg *TransportMessage, timeout time.Duration) ([]byte, error)
 	Subscribe(consumerGroup string, stream string, handler HandlerFunc) error
 	Close() error
 	IsHealthy() bool

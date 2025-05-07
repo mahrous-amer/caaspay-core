@@ -74,4 +74,19 @@ graph TD
     WaitShutdown --> Exit
 ```
 
+### Redis Stream Naming
 
+```mermaid
+graph TB
+    subgraph Stream Naming Logic
+        direction TB
+        A[Service Name] --> B[Method Name]
+        B --> C[Type RPC / Receiver / Emitter]
+        C --> D[Instance ID optional]
+        D --> E[Stream Name Format]
+    end
+
+    E --> F["rpc:authservice:Ping"]
+    E --> G["receiver:billing:GenerateInvoices"]
+    E --> H["emitter:fxrate:UpdateRates:instance-01"]
+```

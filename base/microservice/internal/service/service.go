@@ -112,8 +112,9 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 				Service: s.frameworkCtx.ServiceName(),
 				Method:  trimPrefix(methodName, "RPC_"),
 			}
-			s.frameworkCtx.Logger().Info("🔌 Registering RPC", map[string]interface{}{"method": methodName, "stream": transport.BuildStreamName(streamCfg)})
-			s.registerRPCMethod(transport.BuildStreamName(streamCfg), methodValue, method.Type)
+			streamName := transport.BuildStreamName(streamCfg)
+			s.frameworkCtx.Logger().Info("🔌 Registering RPC", map[string]interface{}{"method": methodName, "stream": streamName})
+			s.registerRPCMethod(streamName, methodValue, method.Type)
 
 		case method.Type.NumIn() == 2 && method.Type.In(0).String() == "context.Context" && hasPrefix(methodName, "Emitter_"):
 			streamCfg := api.StreamConfig{
@@ -121,7 +122,8 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 				Service: s.frameworkCtx.ServiceName(),
 				Method:  trimPrefix(methodName, "Emitter_"),
 			}
-			s.registerEmitterPull(transport.BuildStreamName(streamCfg), 10*time.Second, methodValue)
+			streamName := transport.BuildStreamName(streamCfg)
+			s.registerEmitterPull(streamName, 10*time.Second, methodValue)
 
 		case method.Type.NumIn() == 2 && method.Type.In(0).String() == "context.Context" && hasPrefix(methodName, "Receiver_"):
 			streamCfg := api.StreamConfig{
@@ -129,7 +131,8 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 				Service: s.frameworkCtx.ServiceName(),
 				Method:  trimPrefix(methodName, "Receiver_"),
 			}
-			s.registerReceiver(transport.BuildStreamName(streamCfg), 10, methodValue)
+			streamName := transport.BuildStreamName(streamCfg)
+			s.registerReceiver(streamName, 10, methodValue)
 		}
 	}
 }
@@ -171,7 +174,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 		defer s.frameworkCtx.Metrics().RecordTiming("rpc_request_time", time.Since(start))
 		defer s.frameworkCtx.Compliance().TrackEvent("rpc_request")
 
-		var msg transport.TransportMessage
+		var msg api.TransportMessage
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			s.frameworkCtx.Logger().Error("Failed to decode TransportMessage", map[string]interface{}{"error": err.Error()})
 			return nil, err
@@ -201,10 +204,11 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 		}
 
 		if msg.ReplyTo != "" {
-			reply := transport.NewTransportMessage(s.frameworkCtx.ServiceName(), stream, rawResponse)
+			reply := api.NewTransportMessage(s.frameworkCtx.ServiceName(), stream, nil)
 			reply.MessageID = msg.MessageID
 			reply.Trace = msg.Trace
 			reply.Stash = msg.Stash
+			reply.Response = rawResponse
 
 			replyBytes, err := json.Marshal(reply)
 			if err != nil {
@@ -234,12 +238,12 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 
 // registerReceiver registers a method to handle incoming messages.
 func (s *ServiceStruct) registerReceiver(stream string, batchSize int, method reflect.Value) {
-	batch := make([]*transport.TransportMessage, 0, batchSize)
+	batch := make([]*api.TransportMessage, 0, batchSize)
 
 	handler := func(raw []byte) ([]byte, error) {
 		ctx := s.frameworkCtx.Context()
 
-		msg := &transport.TransportMessage{}
+		msg := &api.TransportMessage{}
 		if err := json.Unmarshal(raw, msg); err != nil {
 			s.frameworkCtx.Logger().Error("Receiver: failed to unmarshal message", map[string]interface{}{
 				"stream": stream,
@@ -312,7 +316,7 @@ func (s *ServiceStruct) registerEmitterPull(stream string, interval time.Duratio
 
 				if len(results) > 0 {
 					if rawArgs, ok := results[0].Interface().(json.RawMessage); ok {
-						tmsg := transport.NewTransportMessage(s.frameworkCtx.ServiceName(), stream, rawArgs)
+						tmsg := api.NewTransportMessage(s.frameworkCtx.ServiceName(), stream, rawArgs)
 						tmsg.Who = s.frameworkCtx.ServiceName()
 						tmsg.Trace = map[string]string{"event": "emitter_pull"}
 
@@ -379,7 +383,7 @@ func (s *ServiceStruct) registerEmitterPoll(stream string, interval time.Duratio
 					}
 
 					for _, raw := range items {
-						msg := transport.NewTransportMessage(s.frameworkCtx.ServiceName(), stream, raw)
+						msg := api.NewTransportMessage(s.frameworkCtx.ServiceName(), stream, raw)
 						msg.Who = s.frameworkCtx.ServiceName()
 						msg.Trace = map[string]string{"source": "emitter_poll"}
 
