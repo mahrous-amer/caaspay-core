@@ -58,6 +58,44 @@ func (s *Supervisor) Go(name string, fn func(ctx context.Context) error) {
 	s.logger.Info("✅ Supervisor started goroutine", map[string]interface{}{"name": name})
 }
 
+// GoLoop runs fn repeatedly until ctx is done.
+// If fn returns an error, the error is sent to errChan to trigger shutdown.
+func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) error) {
+	s.wg.Add(1)
+	s.active.Store(name, true)
+
+	go func() {
+		defer func() {
+			s.active.Delete(name)
+			s.logger.Info("Supervisor loop finished", map[string]interface{}{"name": name})
+			s.wg.Done()
+		}()
+
+		for {
+			select {
+			case <-s.ctx.Done():
+				s.logger.Info("Supervisor loop exiting (ctx cancelled)", map[string]interface{}{"name": name})
+				return
+			default:
+				if err := fn(s.ctx); err != nil {
+					s.logger.Error("Supervisor loop error, triggering shutdown", map[string]interface{}{
+						"name":  name,
+						"error": err.Error(),
+					})
+					// trigger shutdown by sending to errChan
+					select {
+					case s.errChan <- err:
+					default:
+					}
+					return // exit loop after triggering shutdown
+				}
+			}
+		}
+	}()
+
+	s.logger.Info("🔁 Supervisor started loop", map[string]interface{}{"name": name})
+}
+
 // WaitAndShutdown blocks until an error or shutdown signal occurs, then runs the provided shutdown logic.
 func (s *Supervisor) WaitAndShutdown(onShutdown func()) {
 	select {

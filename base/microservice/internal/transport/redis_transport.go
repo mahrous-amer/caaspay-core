@@ -309,8 +309,11 @@ func (r *RedisTransport) Publish(stream string, data []byte) error {
 	return nil
 }
 
-func (r *RedisTransport) Subscribe(stream string, handler api.HandlerFunc) error {
+func (r *RedisTransport) Subscribe(consumerGroup string, stream string, handler api.HandlerFunc) error {
 	group := "consumer_group"
+	if consumerGroup != "" {
+		group = consumerGroup
+	}
 	consumer := uuid.New().String()
 
 	if err := r.client.XGroupCreateMkStream(r.ctx, stream, group, "$").Err(); err != nil {
@@ -323,8 +326,13 @@ func (r *RedisTransport) Subscribe(stream string, handler api.HandlerFunc) error
 		"stream": stream,
 	})
 
-	r.supervisor.Go("redis_subscribe_"+stream, func(ctx context.Context) error {
-		for {
+	//	r.supervisor.Go("redis_subscribe_"+stream, func(ctx context.Context) error {
+	for {
+		select {
+		case <-r.ctx.Done():
+			r.logger.Info("Context canceled, exiting subscription loop", map[string]interface{}{"stream": stream})
+			return nil
+		default:
 			res, err := r.client.XReadGroup(r.ctx, &redis.XReadGroupArgs{
 				Group:    group,
 				Consumer: consumer,
@@ -332,24 +340,26 @@ func (r *RedisTransport) Subscribe(stream string, handler api.HandlerFunc) error
 				Count:    r.streamReadCount,
 				Block:    r.blockTimeout,
 			}).Result()
+
 			if err != nil {
 				if errors.Is(err, redis.Nil) {
-					return nil // normal no-message case
+					continue // ⬅️ No message, try again
 				}
 				r.logger.Error("Error reading from stream", map[string]interface{}{"error": err.Error()})
 				return err
 			}
+
 			for _, s := range res {
 				for _, msg := range s.Messages {
 					body, ok := msg.Values["body"].(string)
 					if !ok {
-						r.logger.Error("Subscribe: invalid message body format", nil)
+						r.logger.Error("Invalid message body format", nil)
 						r.client.XAck(r.ctx, s.Stream, group, msg.ID)
 						continue
 					}
 					processed, err := r.processData([]byte(body))
 					if err != nil {
-						r.logger.Error("processData error in Subscribe", map[string]interface{}{"error": err.Error()})
+						r.logger.Error("processData error", map[string]interface{}{"error": err.Error()})
 					}
 					var handlerErr error
 					for attempt := 1; attempt <= r.maxRetries; attempt++ {
@@ -376,9 +386,10 @@ func (r *RedisTransport) Subscribe(stream string, handler api.HandlerFunc) error
 				}
 			}
 		}
-	})
+	}
+	//	})
 
-	return nil
+	// return nil
 }
 
 func (r *RedisTransport) prepareData(data []byte) ([]byte, error) {

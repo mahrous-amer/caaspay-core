@@ -41,7 +41,7 @@ func (s *ServiceStruct) Run() {
 		"name": s.frameworkCtx.ServiceName(),
 	})
 
-	//s.autoRegisterFunctions(s.serviceInstance)
+	s.autoRegisterFunctions(s.serviceInstance)
 	s.lifecycle.MarkStarted()
 
 	if s.frameworkCtx.Config().Framework.HealthCheck.HTTPServerEnabled {
@@ -98,6 +98,7 @@ func (s *ServiceStruct) Done() <-chan struct{} {
 func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 	svcType := reflect.TypeOf(serviceInstance)
 	svcValue := reflect.ValueOf(serviceInstance)
+	s.frameworkCtx.Logger().Info("🔌 AUTO Registering", map[string]interface{}{"svcType": svcType, "svcValue": svcValue})
 
 	for i := 0; i < svcType.NumMethod(); i++ {
 		method := svcType.Method(i)
@@ -105,18 +106,30 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 		methodName := method.Name
 
 		switch {
-		case method.Type.NumIn() == 3 &&
-			method.Type.In(1).String() == "context.Context" &&
-			hasPrefix(methodName, "RPC_"):
-			stream := trimPrefix(methodName, "RPC_")
-			s.frameworkCtx.Logger().Info("🔌 Registering RPC", map[string]interface{}{"method": methodName, "stream": stream})
-			s.registerRPCMethod(stream, methodValue, method.Type)
+		case method.Type.NumIn() == 2 && hasPrefix(methodName, "RPC_"):
+			streamCfg := api.StreamConfig{
+				Type:    api.StreamTypeRPC,
+				Service: s.frameworkCtx.ServiceName(),
+				Method:  trimPrefix(methodName, "RPC_"),
+			}
+			s.frameworkCtx.Logger().Info("🔌 Registering RPC", map[string]interface{}{"method": methodName, "stream": transport.BuildStreamName(streamCfg)})
+			s.registerRPCMethod(transport.BuildStreamName(streamCfg), methodValue, method.Type)
+
 		case method.Type.NumIn() == 2 && method.Type.In(0).String() == "context.Context" && hasPrefix(methodName, "Emitter_"):
-			stream := trimPrefix(methodName, "Emitter_")
-			s.registerEmitterPull(stream, 10*time.Second, methodValue)
+			streamCfg := api.StreamConfig{
+				Type:    api.StreamTypeEmitter,
+				Service: s.frameworkCtx.ServiceName(),
+				Method:  trimPrefix(methodName, "Emitter_"),
+			}
+			s.registerEmitterPull(transport.BuildStreamName(streamCfg), 10*time.Second, methodValue)
+
 		case method.Type.NumIn() == 2 && method.Type.In(0).String() == "context.Context" && hasPrefix(methodName, "Receiver_"):
-			stream := trimPrefix(methodName, "Receiver_")
-			s.registerReceiver(stream, 10, methodValue)
+			streamCfg := api.StreamConfig{
+				Type:    api.StreamTypeReceiver,
+				Service: s.frameworkCtx.ServiceName(),
+				Method:  trimPrefix(methodName, "Receiver_"),
+			}
+			s.registerReceiver(transport.BuildStreamName(streamCfg), 10, methodValue)
 		}
 	}
 }
@@ -133,10 +146,19 @@ func trimPrefix(s, prefix string) string {
 }
 
 func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, methodType reflect.Type) {
+	// ✅ Expect exactly one argument: func(input InputType) (OutputType, error)
+	if methodType.NumIn() != 2 || methodType.NumOut() != 2 {
+		s.frameworkCtx.Logger().Error("Invalid RPC method signature", map[string]interface{}{
+			"method": method.String(),
+			"note":   "expected: func(InputType) (OutputType, error)",
+		})
+		return
+	}
+
 	argType := methodType.In(1)
-	retErrType := methodType.Out(1)
-	if retErrType != reflect.TypeOf((*error)(nil)).Elem() {
-		s.frameworkCtx.Logger().Error("Invalid RPC signature", map[string]interface{}{
+	errType := methodType.Out(1)
+	if errType != reflect.TypeOf((*error)(nil)).Elem() {
+		s.frameworkCtx.Logger().Error("Invalid RPC return type", map[string]interface{}{
 			"method": method.String(),
 		})
 		return
@@ -168,8 +190,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 			}
 		}
 
-		ctx := s.frameworkCtx.Context()
-		results := method.Call([]reflect.Value{reflect.ValueOf(ctx), argPtr.Elem()})
+		results := method.Call([]reflect.Value{argPtr.Elem()})
 		if errVal := results[1]; !errVal.IsNil() {
 			return nil, errVal.Interface().(error)
 		}
@@ -199,8 +220,8 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 		return nil, nil
 	}
 
-	s.frameworkCtx.Supervisor().Go("rpc_"+stream, func(_ context.Context) error {
-		if err := s.frameworkCtx.Transport().Subscribe(stream, handler); err != nil {
+	s.frameworkCtx.Supervisor().Go("subscribe_"+stream, func(_ context.Context) error {
+		if err := s.frameworkCtx.Transport().Subscribe("rpc_cg", stream, handler); err != nil {
 			s.frameworkCtx.Logger().Error("Failed to subscribe to RPC stream", map[string]interface{}{
 				"stream": stream,
 				"error":  err.Error(),
@@ -254,8 +275,8 @@ func (s *ServiceStruct) registerReceiver(stream string, batchSize int, method re
 		return nil, nil
 	}
 
-	s.frameworkCtx.Supervisor().Go("receiver_"+stream, func(ctx context.Context) error {
-		if err := s.frameworkCtx.Transport().Subscribe(stream, handler); err != nil {
+	s.frameworkCtx.Supervisor().Go("receiver_CG_"+stream, func(ctx context.Context) error {
+		if err := s.frameworkCtx.Transport().Subscribe("receiver_cg", stream, handler); err != nil {
 			s.frameworkCtx.Logger().Error("Failed to subscribe to stream", map[string]interface{}{
 				"stream": stream,
 				"error":  err.Error(),

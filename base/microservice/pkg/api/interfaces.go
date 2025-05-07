@@ -56,6 +56,7 @@ type ValidatorInterface interface {
 type SupervisorInterface interface {
 	// Go launches a managed goroutine that can report failure.
 	Go(name string, fn func(ctx context.Context) error)
+	GoLoop(name string, fn func(ctx context.Context) error)
 
 	// WaitAndShutdown blocks until an error or shutdown occurs, and runs shutdown logic.
 	WaitAndShutdown(onShutdown func())
@@ -92,7 +93,7 @@ type FrameworkContextInterface interface {
 type TransportInterface interface {
 	Publish(stream string, data []byte) error
 	Request(stream string, data []byte, timeout time.Duration) ([]byte, error)
-	Subscribe(stream string, handler HandlerFunc) error
+	Subscribe(consumerGroup string, stream string, handler HandlerFunc) error
 	Close() error
 	IsHealthy() bool
 }
