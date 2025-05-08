@@ -60,6 +60,7 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 
 	redisCfg := transport.RedisTransportConfig{
 		RedisAddr:               cfg.Framework.Transport.RedisAddr,
+		ServiceInstanceID:       cfg.Framework.InstanceID,
 		UseCompression:          cfg.Framework.Transport.UseCompression,
 		UseEncryption:           cfg.Framework.Transport.UseEncryption,
 		EncryptionKey:           cfg.Framework.Transport.EncryptionKey,

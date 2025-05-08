@@ -94,7 +94,7 @@ func (s *pingService) HealthCheck() error {
 			"echo":     resp.Input,
 		})
 
-		time.Sleep(10 * time.Millisecond) // optional: prevent fast looping
+		//time.Sleep(50 * time.Millisecond) // optional: prevent fast looping
 		return nil
 	})
 

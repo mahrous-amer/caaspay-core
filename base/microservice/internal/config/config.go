@@ -26,6 +26,7 @@ type Config struct {
 // FrameworkConfig contains settings for the core framework.
 type FrameworkConfig struct {
 	ServiceName         string              `mapstructure:"service_name"`
+	InstanceID          string              `mapstructure:"instance_id"`
 	Version             string              `mapstructure:"version"`
 	RPC                 RPCConfig           `mapstructure:"rpc"`
 	Transport           TransportConfig     `mapstructure:"transport"`
@@ -266,6 +267,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app_name", "example")
 	v.SetDefault("encryption_key", "Defaultfff")
 	v.SetDefault("framework.service_name", "example-service")
+	v.SetDefault("framework.instance_id", "main")
 	v.SetDefault("framework.version", "1.0.0")
 	v.SetDefault("framework.rpc.response_stream_type", "dedicated")
 	v.SetDefault("framework.rpc.max_retries", 3)
@@ -273,7 +275,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.transport.broker_type", "redis")
 	v.SetDefault("framework.transport.redis_addr", []string{"redis_7:6379"})
 	v.SetDefault("framework.transport.use_cluster", false)
-	v.SetDefault("framework.transport.response_on_service_stream", true)
+	v.SetDefault("framework.transport.response_on_service_stream", false)
 	v.SetDefault("framework.transport.pool_size", 10)
 	v.SetDefault("framework.transport.min_idle_conns", 2)
 	v.SetDefault("framework.transport.stream_read_count", 10)
