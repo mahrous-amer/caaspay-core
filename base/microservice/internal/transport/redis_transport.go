@@ -24,7 +24,7 @@ type RedisTransport struct {
 	serviceReplyStream        string
 	responseOnServiceStream   bool
 	subscribedToServiceStream sync.Once
-	encryptionKey             []byte
+	encryptionKey             string
 	serviceInstanceID         string
 
 	maxRetries      int
@@ -133,7 +133,7 @@ func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *met
 		useCompression:          cfg.UseCompression,
 		useEncryption:           cfg.UseEncryption,
 		serviceReplyStream:      cfg.ServiceReplyStream,
-		encryptionKey:           []byte(cfg.EncryptionKey),
+		encryptionKey:           cfg.EncryptionKey,
 		maxRetries:              maxRetries,
 		retryDelay:              retryDelay,
 		dlqStream:               dlqStream,
