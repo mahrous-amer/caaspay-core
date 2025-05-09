@@ -186,6 +186,12 @@ func (f *FrameworkContext) IsHealthy() bool {
 		}
 	}
 
+	if f.supervisor != nil {
+		if !f.supervisor.(*supervisor.Supervisor).IsHealthy() {
+			healthy = false
+		}
+	}
+
 	return healthy
 }
 
