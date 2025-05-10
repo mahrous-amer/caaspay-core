@@ -19,6 +19,7 @@ import (
 // RedisTransport implements the Transport interface using Redis Streams.
 type RedisTransport struct {
 	client                    redis.Cmdable
+	redisCfg                  *RedisTransportConfig
 	useCompression            bool
 	useEncryption             bool
 	serviceReplyStream        string
@@ -35,11 +36,17 @@ type RedisTransport struct {
 	streamReadCount int64
 	dlqStream       string
 
-	ctx         context.Context
-	logger      *logging.Logger
-	metrics     *metrics.Metrics
-	supervisor  api.SupervisorInterface
-	replyRouter sync.Map // key: messageID, value: chan []byte
+	ctx            context.Context
+	logger         *logging.Logger
+	metrics        *metrics.Metrics
+	supervisor     api.SupervisorInterface
+	replyRouter    sync.Map // key: messageID, value: chan []byte
+	streamsCreated sync.Map // key: stream name (string), value: StreamMeta
+}
+
+type StreamMeta struct {
+	ToDelete bool // Whether to delete the stream on shutdown
+	ToTrim   bool // Whether to periodically trim this stream
 }
 
 // RedisTransportConfig defines the configuration for RedisTransport.
@@ -62,6 +69,9 @@ type RedisTransportConfig struct {
 	ReadTimeout             time.Duration // Timeout for socket reads
 	WriteTimeout            time.Duration // Timeout for socket writes
 	StreamReadCount         int64         // Number of messages to read from stream at once
+	StreamTrimMaxLen        int64         // hard cap on stream length (e.g., 10000 entries)
+	StreamTrimApprox        bool          // use ~ approximation (faster trim)
+	PeriodicTrimFreq        time.Duration // How often to run periodic trimming (0 disables)
 }
 
 func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *metrics.Metrics, sup api.SupervisorInterface, cfg RedisTransportConfig) (*RedisTransport, error) {
@@ -129,6 +139,7 @@ func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *met
 
 	rt := &RedisTransport{
 		client:                  client,
+		redisCfg:                &cfg,
 		serviceInstanceID:       cfg.ServiceInstanceID,
 		useCompression:          cfg.UseCompression,
 		useEncryption:           cfg.UseEncryption,
@@ -181,6 +192,22 @@ func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *met
 		})
 		break
 	}
+
+	if rt.redisCfg.PeriodicTrimFreq > 0 && rt.redisCfg.StreamTrimMaxLen > 0 {
+		sup.GoLoop("redis_periodic_trim", rt.redisCfg.PeriodicTrimFreq, func(ctx context.Context) error {
+			rt.streamsCreated.Range(func(key, value any) bool {
+				stream := key.(string)
+				meta, ok := value.(StreamMeta)
+				if ok && meta.ToTrim {
+					rt.trimStream(stream)
+				}
+				rt.trimStream(stream)
+				return true
+			})
+			return nil
+		})
+	}
+
 	return rt, nil
 }
 
@@ -209,8 +236,7 @@ func (r *RedisTransport) verifyConnection() error {
 	return r.client.Ping(ctx).Err()
 }
 
-func (r *RedisTransport) ensureConsumerGroup(group, stream string) error {
-	//const group = "rpc_cg"
+func (r *RedisTransport) ensureConsumerGroup(group, stream string, meta StreamMeta) error {
 	err := r.client.XGroupCreateMkStream(r.ctx, stream, group, "$").Err()
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		r.logger.Error("Failed to create consumer group", map[string]interface{}{
@@ -220,7 +246,42 @@ func (r *RedisTransport) ensureConsumerGroup(group, stream string) error {
 		})
 		return err
 	}
+
+	// ✅ Track the stream for deletion or trimming
+	r.streamsCreated.LoadOrStore(stream, meta)
+
 	return nil
+}
+
+func (r *RedisTransport) trimStream(stream string) {
+	if r.redisCfg.StreamTrimMaxLen <= 0 {
+		return
+	}
+	args := []interface{}{"XTRIM", stream, "MAXLEN"}
+	if r.redisCfg.StreamTrimApprox {
+		args = append(args, "~")
+	}
+	args = append(args, r.redisCfg.StreamTrimMaxLen)
+
+	var err error
+	switch cli := r.client.(type) {
+	case *redis.Client:
+		err = cli.Do(r.ctx, args...).Err()
+	case *redis.ClusterClient:
+		err = cli.Do(r.ctx, args...).Err()
+	default:
+		r.logger.Warn("Unsupported Redis client type for stream trimming", map[string]interface{}{
+			"stream": stream,
+		})
+		return
+	}
+
+	if err != nil {
+		r.logger.Warn("Failed to trim stream", map[string]interface{}{
+			"stream": stream,
+			"error":  err.Error(),
+		})
+	}
 }
 
 // Request sends an RPC request and waits for a response.
@@ -294,7 +355,7 @@ func (r *RedisTransport) listenForReply(replyStream string, timeout time.Duratio
 	//consumerName := uuid.New().String()
 	consumerName := r.serviceInstanceID
 	// Ensure consumer group exists (MKSTREAM allows stream autocreation)
-	if err := r.ensureConsumerGroup(groupName, replyStream); err != nil {
+	if err := r.ensureConsumerGroup(groupName, replyStream, StreamMeta{ToDelete: true, ToTrim: true}); err != nil {
 		r.logger.Error("Failed to create consumer group", map[string]interface{}{
 			"stream": replyStream,
 			"group":  groupName,

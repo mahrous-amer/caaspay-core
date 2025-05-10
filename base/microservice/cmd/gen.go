@@ -47,6 +47,6 @@ func main() {
 
 	fmt.Println("\n🔑 AES-256 Key derived from your passphrase using SHA-256:")
 	fmt.Printf("  HEX: %s\n", hexKey)
-	fmt.Printf("  KEY: %s\n", derivedKey)
+	fmt.Printf("  KEY: %T\n", derivedKey)
 	fmt.Println("  Use this for long-term secure config (e.g. env var or secret file).")
 }

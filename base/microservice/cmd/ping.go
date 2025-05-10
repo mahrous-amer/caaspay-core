@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -33,12 +34,13 @@ type PingResponse struct {
 
 // pingService implements api.ServiceInterface
 type pingService struct {
-	ctx       api.FrameworkContextInterface
-	healthy   bool
-	pingCount int32
-	pingReq   int32
-	pingLock  sync.Mutex
-	reqLock   sync.Mutex
+	ctx         api.FrameworkContextInterface
+	healthy     bool
+	pingCount   int32
+	pingReq     int32
+	callerCount int32
+	pingLock    sync.Mutex
+	reqLock     sync.Mutex
 }
 
 // newPingService is the constructor passed to framework.Bootstrap
@@ -73,28 +75,38 @@ func (s *pingService) HealthCheck() error {
 	// Prepare request
 	//	var count int32
 
-	s.ctx.Supervisor().GoLoop("call_rpc_healthcheck", func(ctx context.Context) error {
-		s.reqLock.Lock()
-		defer s.reqLock.Unlock()
+	c := atomic.AddInt32(&s.callerCount, 1)
+	s.ctx.Supervisor().GoLoop("call_rpc_healthcheck", 1*time.Second, func(ctx context.Context) error {
+		//s.reqLock.Lock()
+		//defer s.reqLock.Unlock()
 		n := atomic.AddInt32(&s.pingReq, 1)
 
 		stream := s.ctx.BuildRPCStreamName("Ping")
-		req := PingRequest{Message: "CALLER " + strconv.Itoa(int(n))}
+		req := PingRequest{Message: strconv.Itoa(int(c)) + " CALLER " + strconv.Itoa(int(n))}
 
 		var resp PingResponse
-		if err := s.ctx.RequestRPC(stream, req, &resp, 5*time.Second); err != nil {
+		if err := s.ctx.RequestRPC(stream, req, &resp, 50*time.Second); err != nil {
 			return fmt.Errorf("rpc ping request failed: %w", err)
 		}
 
-		s.ctx.Logger().Info("Ping response received", map[string]interface{}{
-			"response": resp.Response,
-		})
+		//s.ctx.Logger().Info("Ping response received", map[string]interface{}{
+		//	"response": resp.Response,
+		//})
 		s.ctx.Logger().Info("✅ Healthcheck RPC_Ping passed", map[string]interface{}{
 			"response": resp.Response,
 			"echo":     resp.Input,
 		})
+		// Seed the random number generator
+		rand.Seed(time.Now().UnixNano())
 
-		//time.Sleep(50 * time.Millisecond) // optional: prevent fast looping
+		// Generate a random duration between 1 and 4 seconds
+		sleepSeconds := rand.Intn(4) + 1 // rand.Intn(4) gives 0–3, +1 gives 1–4
+		sleepDuration := time.Duration(sleepSeconds) * time.Second
+
+		s.ctx.Logger().Info(fmt.Sprintf("Sleeping for %v...\n", sleepDuration), nil)
+		time.Sleep(sleepDuration)
+
+		//time.Sleep(5000 * time.Millisecond) // optional: prevent fast looping
 		return nil
 	})
 
@@ -108,6 +120,8 @@ func (s *pingService) RPC_Ping(input PingRequest) (PingResponse, error) {
 
 	n := atomic.AddInt32(&s.pingCount, 1)
 	s.ctx.Logger().Info(fmt.Sprintf("📡 RPC_Ping invoked %d", n), nil)
+
+	//s.ctx.Logger().Info(fmt.Sprintf("Awake!"), nil)
 
 	return PingResponse{
 		Response: fmt.Sprintf("pong %d", n),

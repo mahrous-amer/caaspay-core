@@ -66,14 +66,17 @@ type TransportConfig struct {
 	StreamReadCount         int64         `mapstructure:"stream_read_count"`          // Number of messages to read from stream
 
 	// Connection Pool and Timeout Options
-	PoolSize        int           `mapstructure:"pool_size"`          // Max total connections
-	MinIdleConns    int           `mapstructure:"min_idle_conns"`     // Minimum idle connections
-	DialTimeout     time.Duration `mapstructure:"dial_timeout"`       // Timeout for initial connection
-	ReadTimeout     time.Duration `mapstructure:"read_timeout"`       // Timeout for read operations
-	WriteTimeout    time.Duration `mapstructure:"write_timeout"`      // Timeout for write operations
-	PoolTimeout     time.Duration `mapstructure:"pool_timeout"`       // Max time to wait for a free connection
-	ConnMaxIdleTime time.Duration `mapstructure:"conn_max_idle_time"` // Max idle time for connections
-	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`  // Max lifetime for a connection
+	PoolSize         int           `mapstructure:"pool_size"`           // Max total connections
+	MinIdleConns     int           `mapstructure:"min_idle_conns"`      // Minimum idle connections
+	DialTimeout      time.Duration `mapstructure:"dial_timeout"`        // Timeout for initial connection
+	ReadTimeout      time.Duration `mapstructure:"read_timeout"`        // Timeout for read operations
+	WriteTimeout     time.Duration `mapstructure:"write_timeout"`       // Timeout for write operations
+	PoolTimeout      time.Duration `mapstructure:"pool_timeout"`        // Max time to wait for a free connection
+	ConnMaxIdleTime  time.Duration `mapstructure:"conn_max_idle_time"`  // Max idle time for connections
+	ConnMaxLifetime  time.Duration `mapstructure:"conn_max_lifetime"`   // Max lifetime for a connection
+	StreamTrimMaxLen int64         `mapstructure:"stream_trim_max_len"` // hard cap on stream length (e.g., 10000 entries)
+	StreamTrimApprox bool          `mapstructure:"stream_trim_approx"`  // use ~ approximation (faster trim)
+	PeriodicTrimFreq time.Duration `mapstructure:"periodic_trim_freq"`  // Frequency of periodic trimming
 }
 
 // LoggingConfig contains logging-related settings.
@@ -286,11 +289,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.transport.pool_timeout", 1*time.Second)
 	v.SetDefault("framework.transport.conn_max_idle_time", 20*time.Second)
 	v.SetDefault("framework.transport.conn_max_lifetime", 200*time.Second)
+	v.SetDefault("framework.transport.periodic_trim_freq", 5*time.Second)
 	v.SetDefault("framework.transport.max_retries", 1000)
 	v.SetDefault("framework.transport.use_encryption", true)
 	v.SetDefault("framework.transport.use_compression", true)
 	v.SetDefault("framework.transport.encryption_key", "1313c15c22701f9fd383b7f7d69efe7b86783605998990a9fb04b84f817defab")
 	v.SetDefault("framework.transport.tls_required", false)
+	v.SetDefault("framework.transport.stream_trim_max_len", 10000)
+	v.SetDefault("framework.transport.stream_trim_approx", true)
 	v.SetDefault("framework.logging.level", "info")
 	v.SetDefault("framework.logging.format", "json")
 	v.SetDefault("framework.logging.redact_sensitive", true)

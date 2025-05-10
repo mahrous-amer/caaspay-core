@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const minLoopDelay = 10 * time.Millisecond
+
 // goroutineInfo tracks metadata about each managed goroutine.
 type goroutineInfo struct {
 	StartTime  time.Time
@@ -91,7 +93,7 @@ func (s *Supervisor) Go(name string, fn func(ctx context.Context) error) {
 }
 
 // GoLoop runs fn repeatedly until ctx is done.
-func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) error) {
+func (s *Supervisor) GoLoop(name string, interval time.Duration, fn func(ctx context.Context) error) {
 	s.wg.Add(1)
 	finalName := s.storeMetadata(name, "framework")
 
@@ -108,6 +110,8 @@ func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) error) {
 				s.logger.Info("Supervisor loop exiting (ctx cancelled)", map[string]interface{}{"name": finalName})
 				return
 			default:
+				start := time.Now()
+
 				if err := fn(s.ctx); err != nil {
 					s.logger.Error("Supervisor loop error, triggering shutdown", map[string]interface{}{
 						"name":  finalName,
@@ -119,11 +123,27 @@ func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) error) {
 					}
 					return
 				}
+
+				// enforce pacing
+				if interval == 0 {
+					time.Sleep(minLoopDelay)
+				} else {
+					if interval < minLoopDelay {
+						interval = minLoopDelay
+					}
+					elapsed := time.Since(start)
+					if sleep := interval - elapsed; sleep > 0 {
+						time.Sleep(sleep)
+					}
+				}
 			}
 		}
 	}()
 
-	s.logger.Info("🔁 Supervisor started loop", map[string]interface{}{"name": finalName})
+	s.logger.Info("🔁 Supervisor started loop", map[string]interface{}{
+		"name":     finalName,
+		"interval": interval,
+	})
 }
 
 // WaitAndShutdown blocks until an error or shutdown signal occurs.

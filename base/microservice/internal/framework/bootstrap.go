@@ -82,6 +82,7 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 			case <-fwCtx.Supervisor().Done():
 				fwCtx.Logger().Info("✅ Service stopped gracefully", nil)
 			case <-shutdownCtx.Done():
+				fwCtx.IsHealthy()
 				fwCtx.Logger().Error("❌ Shutdown timed out. Forcing exit.", nil)
 				os.Exit(1)
 			}

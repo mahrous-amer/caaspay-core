@@ -71,6 +71,9 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 		ReadTimeout:             cfg.Framework.Transport.ReadTimeout,
 		WriteTimeout:            cfg.Framework.Transport.WriteTimeout,
 		StreamReadCount:         cfg.Framework.Transport.StreamReadCount,
+		StreamTrimMaxLen:        cfg.Framework.Transport.StreamTrimMaxLen,
+		StreamTrimApprox:        cfg.Framework.Transport.StreamTrimApprox,
+		PeriodicTrimFreq:        cfg.Framework.Transport.PeriodicTrimFreq,
 	}
 
 	redisTransport, err := transport.NewRedisTransport(
