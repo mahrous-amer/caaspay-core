@@ -83,6 +83,7 @@ func (s *ServiceStruct) Shutdown() {
 	}
 
 	s.lifecycle.MarkShutdown()
+	s.frameworkCtx.Transport().CleanupOnShutdown()
 	s.supervisor.Shutdown()
 
 	// Wait for all supervised goroutines to finish

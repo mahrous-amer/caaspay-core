@@ -74,6 +74,7 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 		StreamTrimMaxLen:        cfg.Framework.Transport.StreamTrimMaxLen,
 		StreamTrimApprox:        cfg.Framework.Transport.StreamTrimApprox,
 		PeriodicTrimFreq:        cfg.Framework.Transport.PeriodicTrimFreq,
+		MoveExpiredToDLQ:        cfg.Framework.Transport.MoveExpiredToDLQ,
 	}
 
 	redisTransport, err := transport.NewRedisTransport(
@@ -210,7 +211,7 @@ func (f *FrameworkContext) RequestRPC(stream string, input any, output any, time
 		return fmt.Errorf("failed to marshal input: %w", err)
 	}
 
-	msg := api.NewTransportMessage(f.ServiceName(), stream, rawArgs)
+	msg := api.NewTransportMessage(f.ServiceName(), stream, rawArgs, timeout)
 	// msg.Auth = f.AuthContext()
 	// msg.Context = f.RequestContext()
 

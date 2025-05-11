@@ -36,17 +36,22 @@ type RedisTransport struct {
 	streamReadCount int64
 	dlqStream       string
 
-	ctx            context.Context
-	logger         *logging.Logger
-	metrics        *metrics.Metrics
-	supervisor     api.SupervisorInterface
-	replyRouter    sync.Map // key: messageID, value: chan []byte
-	streamsCreated sync.Map // key: stream name (string), value: StreamMeta
+	ctx             context.Context
+	logger          *logging.Logger
+	metrics         *metrics.Metrics
+	supervisor      api.SupervisorInterface
+	replyRouter     sync.Map // key: messageID, value: chan []byte
+	streamsCreated  sync.Map // key: stream name (string), value: StreamMeta
+	pendingCleanups sync.Map // key: stream+group string, value: bool
 }
 
 type StreamMeta struct {
-	ToDelete bool // Whether to delete the stream on shutdown
-	ToTrim   bool // Whether to periodically trim this stream
+	ToDelete       bool   // Whether to delete the stream on shutdown
+	ToTrim         bool   // Whether to periodically trim this stream
+	ToCleanPending bool   // whether to clean up pending messages from this stream
+	Group          string // Consumer group name
+	ToCleanGroup   bool   // whether to clean up the consumer group
+	Overflowing    bool   // whether the stream is overflowing or not
 }
 
 // RedisTransportConfig defines the configuration for RedisTransport.
@@ -63,6 +68,7 @@ type RedisTransportConfig struct {
 	MaxRetries              int           // Max number of retries on failure (default 3)
 	RetryDelay              time.Duration // Delay between retries (default 500ms)
 	DLQStream               string        // Optional: stream name for dead-letter queue
+	MoveExpiredToDLQ        bool          // Move expired messages to DLQ
 	PoolSize                int           // Max number of Redis connections
 	MinIdleConns            int           // Minimum idle connections in pool
 	DialTimeout             time.Duration // Timeout for establishing new connections
@@ -72,6 +78,26 @@ type RedisTransportConfig struct {
 	StreamTrimMaxLen        int64         // hard cap on stream length (e.g., 10000 entries)
 	StreamTrimApprox        bool          // use ~ approximation (faster trim)
 	PeriodicTrimFreq        time.Duration // How often to run periodic trimming (0 disables)
+}
+
+// StreamStats holds metrics for a Redis stream.
+type StreamStats struct {
+	Name   string          `json:"name"`
+	Length int64           `json:"length"`
+	Groups []ConsumerGroup `json:"groups"`
+}
+
+type ConsumerGroup struct {
+	Name      string           `json:"name"`
+	Lag       int64            `json:"lag"`
+	Pending   int64            `json:"pending"`
+	Consumers []ConsumerDetail `json:"consumers"`
+}
+
+type ConsumerDetail struct {
+	Name    string        `json:"name"`
+	Pending int64         `json:"pending"`
+	IdleMS  time.Duration `json:"idle_ms"`
 }
 
 func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *metrics.Metrics, sup api.SupervisorInterface, cfg RedisTransportConfig) (*RedisTransport, error) {
@@ -198,10 +224,39 @@ func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *met
 			rt.streamsCreated.Range(func(key, value any) bool {
 				stream := key.(string)
 				meta, ok := value.(StreamMeta)
-				if ok && meta.ToTrim {
+				if !ok || !meta.ToTrim {
+					return true
+				}
+
+				stats, err := rt.collectStreamStats(stream)
+				if err != nil {
+					rt.logger.Warn("Failed to collect stream stats", map[string]interface{}{"stream": stream, "error": err.Error()})
+					return true
+				}
+
+				// Determine if any consumer group is lagging badly
+				overflowing := false
+				for _, group := range stats.Groups {
+					if group.Lag > rt.redisCfg.StreamTrimMaxLen {
+						rt.logger.Warn("Stream is overflowing", map[string]interface{}{
+							"stream": stream,
+							"group":  group.Name,
+							"lag":    group.Lag,
+						})
+						overflowing = true
+						break
+					}
+				}
+
+				// Update meta.Overflowing status
+				meta.Overflowing = overflowing
+				rt.streamsCreated.Store(stream, meta)
+
+				// Only trim if it's not overflowing
+				if !overflowing {
 					rt.trimStream(stream)
 				}
-				rt.trimStream(stream)
+
 				return true
 			})
 			return nil
@@ -226,7 +281,33 @@ func (r *RedisTransport) Close() error {
 func (r *RedisTransport) IsHealthy() bool {
 	ctx, cancel := context.WithTimeout(r.ctx, r.readTimeout)
 	defer cancel()
+	r.streamsCreated.Range(func(key, value any) bool {
+		stream := key.(string)
+		//				meta, ok := value.(StreamMeta)
+		//				if ok && meta.ToTrim {
+		//					rt.trimStream(stream)
+		//				}
+		stats, _ := r.collectStreamStats(stream)
+		r.logger.Info("stream stats", map[string]interface{}{"streamStats": stats})
+		return true
+	})
+
 	return r.client.Ping(ctx).Err() == nil
+}
+
+// Add to RedisTransport
+func (r *RedisTransport) registerStream(stream string, meta StreamMeta) {
+	meta.Overflowing = false
+	r.streamsCreated.Store(stream, meta)
+}
+
+func (r *RedisTransport) isStreamOverflowing(stream string) bool {
+	if v, ok := r.streamsCreated.Load(stream); ok {
+		if meta, ok := v.(StreamMeta); ok {
+			return meta.Overflowing
+		}
+	}
+	return false
 }
 
 // verifyConnection checks broker reachability.
@@ -248,9 +329,74 @@ func (r *RedisTransport) ensureConsumerGroup(group, stream string, meta StreamMe
 	}
 
 	// ✅ Track the stream for deletion or trimming
-	r.streamsCreated.LoadOrStore(stream, meta)
+	//r.streamsCreated.LoadOrStore(stream, meta)
+	meta.Group = group
+	r.registerStream(stream, meta)
+
+	// ✅ Start pending cleanup loop once
+	if meta.ToCleanPending {
+		key := stream + "::" + group
+		if _, loaded := r.pendingCleanups.LoadOrStore(key, true); !loaded {
+			// it has to happen separately not to delay the stream craetion/ensuring step
+			r.supervisor.Go("cleanup_pending_"+group, func(ctx context.Context) error {
+				return r.cleanupExpiredPendingMessages(stream, group)
+			})
+		}
+	}
 
 	return nil
+}
+
+func (r *RedisTransport) collectStreamStats(stream string) (*StreamStats, error) {
+	// XINFO STREAM
+	streamInfo, err := r.client.XInfoStream(r.ctx, stream).Result()
+	if err != nil {
+		r.logger.Warn("XInfoStream failed", map[string]interface{}{"stream": stream, "error": err.Error()})
+		return nil, err
+	}
+	stats := &StreamStats{
+		Name:   stream,
+		Length: streamInfo.Length,
+		Groups: []ConsumerGroup{},
+	}
+
+	// XINFO GROUPS
+	groups, err := r.client.XInfoGroups(r.ctx, stream).Result()
+	if err != nil {
+		r.logger.Warn("XInfoGroups failed", map[string]interface{}{"stream": stream, "error": err.Error()})
+		return stats, nil // continue with partial info
+	}
+
+	for _, grp := range groups {
+		cg := ConsumerGroup{
+			Name:    grp.Name,
+			Lag:     grp.Lag,
+			Pending: grp.Pending,
+		}
+
+		// XINFO CONSUMERS
+		consumers, err := r.client.XInfoConsumers(r.ctx, stream, grp.Name).Result()
+		if err != nil {
+			r.logger.Warn("XInfoConsumers failed", map[string]interface{}{
+				"stream": stream,
+				"group":  grp.Name,
+				"error":  err.Error(),
+			})
+			stats.Groups = append(stats.Groups, cg)
+			continue
+		}
+
+		for _, c := range consumers {
+			cg.Consumers = append(cg.Consumers, ConsumerDetail{
+				Name:    c.Name,
+				Pending: c.Pending,
+				IdleMS:  c.Idle,
+			})
+		}
+		stats.Groups = append(stats.Groups, cg)
+	}
+
+	return stats, nil
 }
 
 func (r *RedisTransport) trimStream(stream string) {
@@ -284,8 +430,69 @@ func (r *RedisTransport) trimStream(stream string) {
 	}
 }
 
+func (r *RedisTransport) cleanupStaleConsumers(stream, group string, idleThreshold time.Duration) {
+	consumers, err := r.client.XInfoConsumers(r.ctx, stream, group).Result()
+	if err != nil {
+		return
+	}
+	for _, c := range consumers {
+		if c.Idle > idleThreshold {
+			r.logger.Info("🧹 Removing stale consumer", map[string]interface{}{
+				"consumer": c.Name, "idle_ms": c.Idle.Milliseconds(),
+			})
+			r.client.XGroupDelConsumer(r.ctx, stream, group, c.Name)
+		}
+	}
+}
+
+func (r *RedisTransport) CleanupOnShutdown() {
+	r.streamsCreated.Range(func(key, value any) bool {
+		stream := key.(string)
+		meta := value.(StreamMeta)
+		if meta.ToDelete {
+			if err := r.client.Del(r.ctx, stream).Err(); err == nil {
+				r.logger.Info("🔪 Deleted stream", map[string]interface{}{"stream": stream})
+			}
+		} else if meta.ToCleanGroup && meta.Group != "" {
+			if err := r.client.XGroupDestroy(r.ctx, stream, meta.Group).Err(); err == nil {
+				r.logger.Info("🧹 Deleted consumer group", map[string]interface{}{
+					"stream": stream,
+					"group":  meta.Group,
+				})
+			} else {
+				r.logger.Warn("Failed to delete consumer group", map[string]interface{}{
+					"stream": stream,
+					"group":  meta.Group,
+					"error":  err.Error(),
+				})
+			}
+		}
+		return true
+	})
+}
+
+func (r *RedisTransport) CleanupOnStartup() {
+	r.streamsCreated.Range(func(key, value any) bool {
+		stream := key.(string)
+		meta := value.(StreamMeta)
+		if meta.ToCleanPending {
+			r.cleanupStaleConsumers(stream, meta.Group, 30*time.Minute)
+		}
+		return true
+	})
+}
+
 // Request sends an RPC request and waits for a response.
 func (r *RedisTransport) Request(stream string, msg *api.TransportMessage, timeout time.Duration) ([]byte, error) {
+	// ensure requested method and service exists
+	exists, err := r.client.Exists(r.ctx, stream).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify stream existence: %w", err)
+	}
+	if exists == 0 {
+		r.logger.Error("Requesting RPC stream that does not exists", map[string]interface{}{"stream": stream, "message": msg})
+		return nil, fmt.Errorf("target RPC stream does not exist: %s", stream)
+	}
 	// Ensure ReplyTo is set
 	if msg.ReplyTo == "" {
 		if r.responseOnServiceStream {
@@ -355,7 +562,7 @@ func (r *RedisTransport) listenForReply(replyStream string, timeout time.Duratio
 	//consumerName := uuid.New().String()
 	consumerName := r.serviceInstanceID
 	// Ensure consumer group exists (MKSTREAM allows stream autocreation)
-	if err := r.ensureConsumerGroup(groupName, replyStream, StreamMeta{ToDelete: true, ToTrim: true}); err != nil {
+	if err := r.ensureConsumerGroup(groupName, replyStream, StreamMeta{ToDelete: true, ToTrim: true, ToCleanPending: true, ToCleanGroup: true}); err != nil {
 		r.logger.Error("Failed to create consumer group", map[string]interface{}{
 			"stream": replyStream,
 			"group":  groupName,
@@ -369,15 +576,6 @@ func (r *RedisTransport) listenForReply(replyStream string, timeout time.Duratio
 			r.logger.Info("listenForReply: context canceled", nil)
 			return
 		default:
-			err := r.client.XGroupCreateMkStream(r.ctx, replyStream, groupName, "$").Err()
-			if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
-				r.logger.Error("Failed to create consumer group", map[string]interface{}{
-					"stream": replyStream,
-					"group":  groupName,
-					"error":  err.Error(),
-				})
-				return
-			}
 			res, err := r.client.XReadGroup(r.ctx, &redis.XReadGroupArgs{
 				Group:    groupName,
 				Consumer: consumerName,
@@ -415,6 +613,18 @@ func (r *RedisTransport) listenForReply(replyStream string, timeout time.Duratio
 					continue
 				}
 
+				if decoded.Deadline > 0 && time.Now().After(time.Unix(0, decoded.Deadline)) {
+					r.logger.Warn("RPC response past deadline, discarding", map[string]interface{}{
+						"messageID": decoded.MessageID,
+						"replyTo":   replyStream,
+					})
+					if r.redisCfg.MoveExpiredToDLQ {
+						_ = PublishToDLQ(r.ctx, r.client, r.dlqStream, replyStream, body)
+					}
+					r.client.XAck(r.ctx, replyStream, groupName, msg.ID)
+					continue
+				}
+
 				// ✅ Send reply to waiting channel
 				if responseCh, ok := r.replyRouter.LoadAndDelete(decoded.MessageID); ok {
 					responseCh.(chan []byte) <- processed
@@ -438,11 +648,71 @@ func (r *RedisTransport) listenForReply(replyStream string, timeout time.Duratio
 	}
 }
 
+func (r *RedisTransport) cleanupExpiredPendingMessages(stream, group string) error {
+	pendingRes, err := r.client.XPending(r.ctx, stream, group).Result()
+	if err != nil {
+		r.logger.Warn("Failed XPENDING", map[string]interface{}{"stream": stream, "error": err.Error()})
+		return nil
+	}
+	if pendingRes.Count == 0 {
+		return nil
+	}
+
+	entries, err := r.client.XPendingExt(r.ctx, &redis.XPendingExtArgs{
+		Stream: stream,
+		Group:  group,
+		Start:  "-",
+		End:    "+",
+		Count:  100,
+	}).Result()
+	if err != nil {
+		r.logger.Warn("Failed XPendingExt", map[string]interface{}{"stream": stream, "error": err.Error()})
+		return nil
+	}
+
+	for _, entry := range entries {
+		msgID := entry.ID
+		msgs, err := r.client.XRange(r.ctx, stream, msgID, msgID).Result()
+		if err != nil || len(msgs) == 0 {
+			continue
+		}
+		bodyStr, ok := msgs[0].Values["body"].(string)
+		if !ok {
+			continue
+		}
+		processed, err := r.processData([]byte(bodyStr))
+		if err != nil {
+			continue
+		}
+		decoded, err := api.DecodeTransportMessage(processed)
+		if err != nil {
+			continue
+		}
+		if decoded.Deadline > 0 && time.Now().After(time.Unix(0, decoded.Deadline)) {
+			r.logger.Warn("Removing expired pending message", map[string]interface{}{
+				"stream": stream,
+				"msgID":  msgID,
+			})
+			r.client.XAck(r.ctx, stream, group, msgID)
+			if r.redisCfg.MoveExpiredToDLQ {
+				_ = PublishToDLQ(r.ctx, r.client, r.dlqStream, stream, bodyStr)
+			}
+		}
+	}
+	return nil
+}
+
 func (r *RedisTransport) Publish(stream string, data []byte) error {
 	encodedData, err := r.prepareData(data)
 	if err != nil {
 		r.logger.Error("prepareData error in Publish", map[string]interface{}{"error": err.Error()})
 		return err
+	}
+	r.registerStream(stream, StreamMeta{
+		ToTrim: r.redisCfg.StreamTrimMaxLen > 0,
+	})
+	if r.isStreamOverflowing(stream) {
+		return fmt.Errorf("stream %s is currently overflowing, throttling in place", stream)
 	}
 	addOp := func() error {
 		_, err := r.client.XAdd(r.ctx, &redis.XAddArgs{
@@ -474,10 +744,13 @@ func (r *RedisTransport) Subscribe(consumerGroup string, stream string, handler 
 	}
 	consumer := uuid.New().String()
 
-	if err := r.client.XGroupCreateMkStream(r.ctx, stream, group, "$").Err(); err != nil {
-		if err.Error() != "BUSYGROUP Consumer Group name already exists" {
-			r.logger.Error("Error creating consumer group", map[string]interface{}{"error": err.Error()})
-		}
+	if err := r.ensureConsumerGroup(group, stream, StreamMeta{ToDelete: false, ToTrim: true, ToCleanPending: true, ToCleanGroup: false}); err != nil {
+		r.logger.Error("Failed to create consumer group", map[string]interface{}{
+			"stream": stream,
+			"group":  group,
+			"error":  err.Error(),
+		})
+		return err
 	}
 
 	r.logger.Info("Subscribing to stream", map[string]interface{}{

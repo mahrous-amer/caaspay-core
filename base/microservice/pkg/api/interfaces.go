@@ -99,4 +99,5 @@ type TransportInterface interface {
 	Subscribe(consumerGroup string, stream string, handler HandlerFunc) error
 	Close() error
 	IsHealthy() bool
+	CleanupOnShutdown()
 }

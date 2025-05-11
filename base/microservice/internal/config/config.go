@@ -61,6 +61,7 @@ type TransportConfig struct {
 	ServiceReplyStream      string        `mapstructure:"service_reply_stream"`       // Default reply stream for RPC
 	ResponseOnServiceStream bool          `mapstructure:"response_on_service_stream"` // Use service stream for responses
 	DLQStream               string        `mapstructure:"dlq_stream"`                 // Dead-letter stream for failed messages
+	MoveExpiredToDLQ        bool          `mapstructure:"move_expired_to_dlq"`        // move expired messages to DLQ
 	MaxRetries              int           `mapstructure:"max_retries"`                // Retry attempts for transient failures
 	RetryDelay              time.Duration `mapstructure:"retry_delay"`                // Delay between retry attempts
 	StreamReadCount         int64         `mapstructure:"stream_read_count"`          // Number of messages to read from stream
@@ -295,6 +296,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.transport.use_compression", true)
 	v.SetDefault("framework.transport.encryption_key", "1313c15c22701f9fd383b7f7d69efe7b86783605998990a9fb04b84f817defab")
 	v.SetDefault("framework.transport.tls_required", false)
+	v.SetDefault("framework.transport.move_expired_to_dlq", true)
 	v.SetDefault("framework.transport.stream_trim_max_len", 10000)
 	v.SetDefault("framework.transport.stream_trim_approx", true)
 	v.SetDefault("framework.logging.level", "info")

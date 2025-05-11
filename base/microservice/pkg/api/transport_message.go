@@ -52,13 +52,19 @@ type MessageError struct {
 }
 
 // NewTransportMessage creates a new message with defaults.
-func NewTransportMessage(service, method string, rawArgs json.RawMessage) *TransportMessage {
+func NewTransportMessage(service, method string, rawArgs json.RawMessage, timeout ...time.Duration) *TransportMessage {
+	// Default to 30 seconds
+	t := 30 * time.Second
+	if len(timeout) > 0 {
+		t = timeout[0]
+	}
+
 	return &TransportMessage{
 		MessageID:   uuid.NewString(),
 		TransportID: uuid.NewString(),
 		Service:     service,
 		Method:      method,
-		Deadline:    time.Now().Add(30 * time.Second).Unix(),
+		Deadline:    time.Now().Add(t).UnixNano(),
 		Args:        rawArgs,
 		Stash:       map[string]any{},
 		Trace:       map[string]string{},
