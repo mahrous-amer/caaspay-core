@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -11,17 +12,19 @@ import (
 )
 
 const minLoopDelay = 10 * time.Millisecond
+const shutdownTimeout = 40 * time.Second
 
 // goroutineInfo tracks metadata about each managed goroutine.
 type goroutineInfo struct {
 	StartTime  time.Time
-	Origin     string // e.g. "framework", "service"
-	CallerFile string // source file where it was started (best-effort)
-	CallerLine int    // line number where it was started (best-effort)
-	MethodName string // Method name
+	Origin     string
+	CallerFile string
+	CallerLine int
+	MethodName string
+	Cancel     context.CancelFunc
+	Done       chan struct{}
 }
 
-// Supervisor manages controlled goroutines with centralized error handling and graceful shutdown.
 type Supervisor struct {
 	wg      sync.WaitGroup
 	errChan chan error
@@ -33,7 +36,6 @@ type Supervisor struct {
 	active  sync.Map // map[string]goroutineInfo
 }
 
-// NewSupervisor initializes a new Supervisor instance.
 func NewSupervisor(ctx context.Context, cancel context.CancelFunc, logger *logging.Logger) *Supervisor {
 	return &Supervisor{
 		errChan: make(chan error, 1),
@@ -44,18 +46,21 @@ func NewSupervisor(ctx context.Context, cancel context.CancelFunc, logger *loggi
 	}
 }
 
-func (s *Supervisor) storeMetadata(name, origin string) string {
+func (s *Supervisor) storeMetadata(name, origin string, cancel context.CancelFunc) (string, chan struct{}) {
 	id := uuid.New().String()
 	finalName := name + ":" + id
 	file, line := callerInfo(3)
+	done := make(chan struct{})
 	s.active.Store(finalName, goroutineInfo{
 		StartTime:  time.Now(),
 		Origin:     origin,
 		CallerFile: file,
 		CallerLine: line,
 		MethodName: name,
+		Cancel:     cancel,
+		Done:       done,
 	})
-	return finalName
+	return finalName, done
 }
 
 func callerInfo(skip int) (string, int) {
@@ -65,154 +70,173 @@ func callerInfo(skip int) (string, int) {
 	return "unknown", 0
 }
 
-// Go launches a managed goroutine.
 func (s *Supervisor) Go(name string, fn func(ctx context.Context) error) {
 	s.wg.Add(1)
-	finalName := s.storeMetadata(name, "framework")
+	subCtx, subCancel := context.WithCancel(s.ctx)
+	finalName, done := s.storeMetadata(name, "framework", subCancel)
 
 	go func() {
 		defer func() {
+			if r := recover(); r != nil {
+				s.logger.Error("🔥 Panic in goroutine", map[string]interface{}{"name": finalName, "recover": r})
+			}
 			s.active.Delete(finalName)
-			s.logger.Info("Supervisor goroutine finished", map[string]interface{}{"name": finalName})
+			close(done)
+			s.logger.Info("✅ Supervisor goroutine finished", map[string]interface{}{"name": finalName})
 			s.wg.Done()
 		}()
 
-		if err := fn(s.ctx); err != nil {
+		err := fn(subCtx)
+		if err != nil && s.ctx.Err() == nil {
 			select {
 			case s.errChan <- err:
 			default:
 			}
-			s.logger.Error("Supervisor goroutine crashed", map[string]interface{}{
-				"name":  finalName,
-				"error": err.Error(),
-			})
+			s.logger.Error("💥 Goroutine crashed", map[string]interface{}{"name": finalName, "error": err.Error()})
 		}
 	}()
 
-	s.logger.Info("✅ Supervisor started goroutine", map[string]interface{}{"name": finalName})
+	s.logger.Info("🚀 Supervisor started goroutine", map[string]interface{}{"name": finalName})
 }
 
-// GoLoop runs fn repeatedly until ctx is done.
-func (s *Supervisor) GoLoop(name string, interval time.Duration, fn func(ctx context.Context) error) {
+func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) (time.Duration, error)) {
 	s.wg.Add(1)
-	finalName := s.storeMetadata(name, "framework")
+	subCtx, subCancel := context.WithCancel(s.ctx)
+	finalName, done := s.storeMetadata(name, "framework", subCancel)
 
 	go func() {
 		defer func() {
+			if r := recover(); r != nil {
+				s.logger.Error("🔥 Panic in loop", map[string]interface{}{"name": finalName, "recover": r})
+			}
 			s.active.Delete(finalName)
-			s.logger.Info("Supervisor loop finished", map[string]interface{}{"name": finalName})
+			close(done)
+			s.logger.Info("✅ Supervisor loop finished", map[string]interface{}{"name": finalName})
 			s.wg.Done()
 		}()
 
 		for {
 			select {
-			case <-s.ctx.Done():
-				s.logger.Info("Supervisor loop exiting (ctx cancelled)", map[string]interface{}{"name": finalName})
+			case <-subCtx.Done():
+				s.logger.Info("🛑 Loop exiting (ctx canceled)", map[string]interface{}{"name": finalName, "reason": subCtx.Err().Error()})
 				return
 			default:
-				start := time.Now()
+			}
 
-				if err := fn(s.ctx); err != nil {
-					s.logger.Error("Supervisor loop error, triggering shutdown", map[string]interface{}{
-						"name":  finalName,
-						"error": err.Error(),
-					})
-					select {
-					case s.errChan <- err:
-					default:
-					}
-					return
+			start := time.Now()
+			nextInterval, err := fn(subCtx)
+			if err != nil {
+				s.logger.Error("💥 Supervisor loop error, triggering shutdown", map[string]interface{}{"name": finalName, "error": err.Error()})
+				select {
+				case s.errChan <- err:
+				default:
 				}
+				return
+			}
 
-				// enforce pacing
-				if interval == 0 {
-					time.Sleep(minLoopDelay)
-				} else {
-					if interval < minLoopDelay {
-						interval = minLoopDelay
-					}
-					elapsed := time.Since(start)
-					if sleep := interval - elapsed; sleep > 0 {
-						time.Sleep(sleep)
-					}
+			elapsed := time.Since(start)
+			if nextInterval < minLoopDelay {
+				nextInterval = minLoopDelay
+			}
+			sleep := nextInterval - elapsed
+			if sleep > 0 {
+				select {
+				case <-subCtx.Done():
+					s.logger.Info("🛑 Loop interrupted during sleep", map[string]interface{}{"name": finalName})
+					return
+				case <-time.After(sleep):
 				}
 			}
 		}
 	}()
 
-	s.logger.Info("🔁 Supervisor started loop", map[string]interface{}{
-		"name":     finalName,
-		"interval": interval,
-	})
+	s.logger.Info("🔁 Supervisor started loop", map[string]interface{}{"name": finalName})
 }
 
-// WaitAndShutdown blocks until an error or shutdown signal occurs.
 func (s *Supervisor) WaitAndShutdown(onShutdown func()) {
 	select {
 	case <-s.ctx.Done():
-	case <-s.errChan:
+		s.logger.Info("🛑 Shutdown triggered by context cancellation", nil)
+	case err := <-s.errChan:
+		s.logger.Error("💥 Shutdown due to error", map[string]interface{}{"error": err.Error()})
 	}
 
-	onShutdown()
-	s.logger.Info("📋 Waiting for goroutines to finish:", nil)
-	s.active.Range(func(key, value any) bool {
-		s.logger.Info("🕒 Still active:", map[string]interface{}{"name": key})
-		return true
-	})
-	s.wg.Wait()
+	s.logger.Info("📋 Waiting for goroutines to finish...", nil)
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		onShutdown()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		s.logger.Info("✅ All goroutines shut down cleanly", nil)
+	case <-time.After(shutdownTimeout):
+		s.logger.Error("❌ Shutdown timed out. Dumping active goroutines:", nil)
+		s.active.Range(func(key, value any) bool {
+			info := value.(goroutineInfo)
+			s.logger.Warn("🧵 Possibly stuck", map[string]interface{}{
+				"name":        key,
+				"start_time":  info.StartTime.String(),
+				"caller_file": info.CallerFile,
+				"caller_line": info.CallerLine,
+				"method":      info.MethodName,
+			})
+			return true
+		})
+		time.Sleep(1 * time.Second) // Optional: let logs flush
+		os.Exit(1)
+
+	}
 
 	s.once.Do(func() {
 		close(s.doneCh)
 	})
 }
 
-// Shutdown signals all running goroutines to stop.
 func (s *Supervisor) Shutdown() {
 	s.cancel()
 }
 
-// Done returns a channel that's closed when all goroutines have exited.
 func (s *Supervisor) Done() <-chan struct{} {
 	return s.doneCh
 }
 
-// StopAll stops all routines and waits for them to exit.
 func (s *Supervisor) StopAll() {
 	s.Shutdown()
 	s.wg.Wait()
 }
 
-// IsHealthy checks for stuck goroutines and emits metrics.
 func (s *Supervisor) IsHealthy() bool {
 	healthy := true
 	now := time.Now()
 	activeCount := 0
 
 	s.active.Range(func(key, value any) bool {
-		name := key.(string)
 		info := value.(goroutineInfo)
 		uptime := now.Sub(info.StartTime)
 		activeCount++
 
 		entry := map[string]interface{}{
-			"name":        name,
+			"name":        key,
 			"uptime":      uptime.String(),
 			"origin":      info.Origin,
 			"caller_file": info.CallerFile,
 			"caller_line": info.CallerLine,
-			"method_name": info.MethodName,
+			"method":      info.MethodName,
 		}
 
 		if uptime > time.Minute {
 			s.logger.Warn("⚠️ Long-running goroutine", entry)
-			//healthy = false
+			// healthy = false // Enable if desired
 		} else {
 			s.logger.Info("🧵 Active goroutine", entry)
 		}
 		return true
 	})
 
-	s.logger.Info("📊 Supervisor active goroutines", map[string]interface{}{
+	s.logger.Info("📊 Supervisor active count", map[string]interface{}{
 		"count": activeCount,
 	})
 

@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"math/rand"
+	//"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -13,12 +14,10 @@ import (
 	"github.com/caaspay/caaspay-core/pkg/api"
 )
 
-// PingRequest represents the RPC request input.
 type PingRequest struct {
 	Message string `json:"message"`
 }
 
-// Validate implements optional input validation.
 func (p *PingRequest) Validate() error {
 	if p.Message == "" {
 		return fmt.Errorf("message is required")
@@ -26,26 +25,43 @@ func (p *PingRequest) Validate() error {
 	return nil
 }
 
-// PingResponse represents the RPC reply.
 type PingResponse struct {
 	Response string                 `json:"response"`
 	Input    map[string]interface{} `json:"input"`
 }
 
-// pingService implements api.ServiceInterface
+type HeartbeatMessage struct {
+	Node   string `json:"node"`
+	Uptime int64  `json:"uptime"`
+	Status string `json:"status"`
+}
+
+type PushlogMessage struct {
+	Ts     string `json:"ts"`
+	Uptime string `json:"uptime"`
+	Note   string `json:"note"`
+}
+
 type pingService struct {
 	ctx         api.FrameworkContextInterface
 	healthy     bool
 	pingCount   int32
 	pingReq     int32
 	callerCount int32
+	uptimeStart time.Time
+	emitChan    chan *api.TransportMessage
 	pingLock    sync.Mutex
-	reqLock     sync.Mutex
+	pushlogChan chan *api.TransportMessage
 }
 
-// newPingService is the constructor passed to framework.Bootstrap
 func newPingService(ctx api.FrameworkContextInterface) api.ServiceInterface {
-	return &pingService{ctx: ctx, pingCount: 0}
+	s := &pingService{
+		ctx:         ctx,
+		uptimeStart: time.Now(),
+		emitChan:    make(chan *api.TransportMessage, 10),
+	}
+
+	return s
 }
 
 func (s *pingService) Start() error {
@@ -57,76 +73,126 @@ func (s *pingService) Start() error {
 func (s *pingService) Stop() error {
 	s.ctx.Logger().Info("🛑 pingService.Stop called", nil)
 	s.healthy = false
+	close(s.emitChan)
 	return nil
 }
 
 func (s *pingService) HealthCheck() error {
-	//	if s.healthy {
-	//		s.ctx.Logger().Info("✅ pingService is healthy", nil)
-	//		return nil
-	//	}
-	//	s.ctx.Logger().Error("⚠️ pingService is not healthy", nil)
-	//	return fmt.Errorf("pingService unhealthy")
-	//  stream := s.ctx.Transport().BuildStreamName(api.StreamConfig{
-	//		Type:    api.StreamTypeRPC,
-	//		Service: s.ctx.ServiceName(),
-	//		Method:  "Ping",
-	//	})
-	// Prepare request
-	//	var count int32
-
 	c := atomic.AddInt32(&s.callerCount, 1)
-	s.ctx.Supervisor().GoLoop("call_rpc_healthcheck", 1*time.Second, func(ctx context.Context) error {
-		//s.reqLock.Lock()
-		//defer s.reqLock.Unlock()
-		n := atomic.AddInt32(&s.pingReq, 1)
-
-		stream := s.ctx.BuildRPCStreamName("Ping")
-		req := PingRequest{Message: strconv.Itoa(int(c)) + " CALLER " + strconv.Itoa(int(n))}
-
-		var resp PingResponse
-		if err := s.ctx.RequestRPC(stream, req, &resp, 50*time.Second); err != nil {
-			return fmt.Errorf("rpc ping request failed: %w", err)
-		}
-
-		//s.ctx.Logger().Info("Ping response received", map[string]interface{}{
-		//	"response": resp.Response,
-		//})
-		s.ctx.Logger().Info("✅ Healthcheck RPC_Ping passed", map[string]interface{}{
-			"response": resp.Response,
-			"echo":     resp.Input,
-		})
-		// Seed the random number generator
-		rand.Seed(time.Now().UnixNano())
-
-		// Generate a random duration between 1 and 4 seconds
-		sleepSeconds := rand.Intn(4) + 1 // rand.Intn(4) gives 0–3, +1 gives 1–4
-		sleepDuration := time.Duration(sleepSeconds) * time.Second
-
-		s.ctx.Logger().Info(fmt.Sprintf("Sleeping for %v...\n", sleepDuration), nil)
-		time.Sleep(sleepDuration)
-
-		//time.Sleep(5000 * time.Millisecond) // optional: prevent fast looping
-		return nil
+	//s.ctx.Supervisor().GoLoop("call_rpc_healthcheck", func(ctx context.Context) (time.Duration, error) {
+	n := atomic.AddInt32(&s.pingReq, 1)
+	stream := s.ctx.BuildRPCStreamName("Ping")
+	req := PingRequest{Message: strconv.Itoa(int(c)) + " CALLER " + strconv.Itoa(int(n))}
+	var resp PingResponse
+	if err := s.ctx.RequestRPC(stream, req, &resp, 50*time.Second); err != nil {
+		//	return 2 * time.Second, fmt.Errorf("rpc ping request failed: %w", err)
+	}
+	s.ctx.Logger().Info("✅ Healthcheck RPC_Ping passed", map[string]interface{}{
+		"response": resp.Response,
+		"echo":     resp.Input,
 	})
+	//sleepDuration := time.Duration(rand.Intn(4)+1) * time.Second
+	log := map[string]any{"note": "triggered", "ts": "TTTTTTTT " + strconv.Itoa(int(n))}
+	payload, _ := json.Marshal(log)
 
+	msg2 := api.NewTransportMessage(s.ctx.ServiceName(), "pushlog", payload)
+	msg2.Trace["source"] = "manual_trigger"
+	//select {
+	//case s.pushlogChan <- msg2:
+	//	// success
+	//case <-ctx.Done():
+	//	return nil, 0, ctx.Err()
+	//}
+	s.pushlogChan <- msg2
+	//	return sleepDuration, nil
+	//})
 	return nil
 }
 
-// RPC_Ping handles the ping RPC call.
 func (s *pingService) RPC_Ping(input PingRequest) (PingResponse, error) {
 	s.pingLock.Lock()
 	defer s.pingLock.Unlock()
-
 	n := atomic.AddInt32(&s.pingCount, 1)
 	s.ctx.Logger().Info(fmt.Sprintf("📡 RPC_Ping invoked %d", n), nil)
-
-	//s.ctx.Logger().Info(fmt.Sprintf("Awake!"), nil)
-
 	return PingResponse{
 		Response: fmt.Sprintf("pong %d", n),
 		Input:    map[string]interface{}{"message": input.Message},
 	}, nil
+}
+
+func (s *pingService) EmitterPull_Heartbeat(ctx context.Context) ([]*api.TransportMessage, time.Duration, error) {
+	select {
+	case <-ctx.Done():
+		return nil, 0, ctx.Err()
+	default:
+	}
+
+	heartbeat := HeartbeatMessage{
+		Node:   s.ctx.ServiceName(),
+		Uptime: int64(time.Since(s.uptimeStart).Seconds()),
+		Status: "alive",
+	}
+	data, _ := json.Marshal(heartbeat)
+	msg := api.NewTransportMessage(s.ctx.ServiceName(), "ping.heartbeat", data)
+	msg.Trace["source"] = "emitter_pull"
+
+	//log := map[string]any{"note": "triggered", "ts": "TTTTTTTT",}
+	//payload, _ := json.Marshal(log)
+
+	//msg2 := api.NewTransportMessage(s.ctx.ServiceName(), "pushlog", payload)
+	//msg2.Trace["source"] = "manual_trigger"
+	//select {
+	//case s.pushlogChan <- msg2:
+	//	// success
+	//case <-ctx.Done():
+	//	return nil, 0, ctx.Err()
+	//}
+	//s.pushlogChan <- msg2
+	return []*api.TransportMessage{msg, msg, msg, msg, msg, msg}, 10 * time.Millisecond, nil
+}
+
+func (s *pingService) EmitterChannel_PushLog(ctx context.Context, ch chan *api.TransportMessage) {
+	s.pushlogChan = ch
+}
+
+//func (s *pingService) EmitterChannel_PushLog(ctx context.Context, ch chan *api.TransportMessage) {
+//	ticker := time.NewTicker(1 * time.Millisecond)
+//	defer ticker.Stop()
+//
+//	for {
+//		select {
+//		case <-ctx.Done():
+//			return
+//		case ts := <-ticker.C:
+//			log := map[string]interface{}{
+//				"ts":     ts,
+//				"note":   "periodic log",
+//				"uptime": time.Since(s.uptimeStart).String(),
+//			}
+//			data, _ := json.Marshal(log)
+//			msg := api.NewTransportMessage(s.ctx.ServiceName(), "ping.push_log", data)
+//			msg.Trace["source"] = "emitter_channel"
+//			ch <- msg
+//		}
+//	}
+//}
+
+func (s *pingService) Receiver_example__service_Heartbeat(ctx context.Context, msg *HeartbeatMessage) error {
+	//	s.ctx.Logger().Info("✅ Heartbeat received", map[string]interface{}{
+	//		"node":   msg.Node,
+	//		"status": msg.Status,
+	//		"uptime": msg.Uptime,
+	//	})
+	return nil
+}
+
+func (s *pingService) Receiver_example__service_Pushlog(ctx context.Context, msg *PushlogMessage) error {
+	s.ctx.Logger().Info("✅ Pushlog received", map[string]interface{}{
+		"note":   msg.Note,
+		"ts":     msg.Ts,
+		"uptime": msg.Uptime,
+	})
+	return nil
 }
 
 func main() {

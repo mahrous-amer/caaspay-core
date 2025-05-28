@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/caaspay/caaspay-core/internal/service"
 	"github.com/caaspay/caaspay-core/pkg/api"
@@ -67,26 +66,8 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 
 	// Step 7: Wait for shutdown and exit
 	fwCtx.Supervisor().WaitAndShutdown(func() {
-
-		fwCtx.Logger().Info("⏳ Last wait for shuting down...", nil)
-		// to prevent framework from getting stuck
-		// perform this in a dedicated goroutine
-		// let it finish, and have the last confirmation that everything is done.
-		// typically won't even execute if everything shutdowns gracefully
-		go func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			fwCtx.Logger().Info("⏳ Waiting for service.Done() or shutdown timeout...", nil)
-			select {
-			case <-fwCtx.Supervisor().Done():
-				fwCtx.Logger().Info("✅ Service stopped gracefully", nil)
-			case <-shutdownCtx.Done():
-				fwCtx.IsHealthy()
-				fwCtx.Logger().Error("❌ Shutdown timed out. Forcing exit.", nil)
-				os.Exit(1)
-			}
-		}()
+		fwCtx.Logger().Info("service shutdown phase done...", nil)
+		//	svcStruct.Shutdown()
 	})
 
 	fwCtx.Logger().Info("🏁 Bootstrap shutdown complete", nil)

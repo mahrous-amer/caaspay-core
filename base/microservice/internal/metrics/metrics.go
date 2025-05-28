@@ -3,10 +3,11 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"log"
+	"sync"
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/config"
+	"github.com/caaspay/caaspay-core/pkg/api"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
@@ -15,111 +16,192 @@ import (
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
-var (
-	meter        metric.Meter
-	requests     metric.Int64Counter
-	latency      metric.Float64Histogram
-	errorCounter metric.Int64Counter
-	activeReqs   metric.Int64UpDownCounter
-)
-
-// Metrics manages monitoring for services.
 type Metrics struct {
+	ctx         context.Context
+	logger      api.LoggerInterface
 	serviceName string
 	cfg         *config.ObservabilityConfig
-	ctx         context.Context
+	meter       metric.Meter
+	enabled     bool
+
+	// dynamic registry
+	counters      map[string]metric.Int64Counter
+	histograms    map[string]metric.Float64Histogram
+	activeGauges  map[string]metric.Int64UpDownCounter
+	registryMutex sync.Mutex
 }
 
-// NewMetrics initializes OpenTelemetry with Prometheus and DataDog based on config.
-func NewMetrics(ctx context.Context, serviceName string, cfg *config.ObservabilityConfig) (*Metrics, error) {
+func NewMetrics(ctx context.Context, serviceName string, cfg *config.ObservabilityConfig, logger api.LoggerInterface) (*Metrics, error) {
+	m := &Metrics{
+		ctx:           ctx,
+		logger:        logger,
+		serviceName:   serviceName,
+		cfg:           cfg,
+		enabled:       cfg.TracingEnabled,
+		counters:      make(map[string]metric.Int64Counter),
+		histograms:    make(map[string]metric.Float64Histogram),
+		activeGauges:  make(map[string]metric.Int64UpDownCounter),
+		registryMutex: sync.Mutex{},
+	}
+
 	if !cfg.TracingEnabled {
-		log.Println("📉 Metrics disabled in configuration")
-		return &Metrics{ctx: ctx}, nil
+		logger.Info("📉 Metrics disabled in configuration", nil)
+		return m, nil
 	}
 
 	if cfg.MetricsAdapter == "prometheus" || cfg.MetricsAdapter == "both" {
-		if err := setupPrometheus(cfg); err != nil {
+		if err := setupPrometheus(); err != nil {
 			return nil, err
 		}
 	}
 
 	if cfg.MetricsAdapter == "datadog" || cfg.MetricsAdapter == "both" {
-		setupDataDog(cfg)
+		tracer.Start(
+			tracer.WithService(cfg.MetricsHost),
+			tracer.WithEnv("development"),
+		)
+		logger.Info("📡 DataDog metrics enabled", map[string]interface{}{
+			"adapter": "statsd",
+		})
 	}
 
-	// Create OpenTelemetry meter
-	meter = otel.Meter(serviceName)
+	m.meter = otel.Meter(serviceName)
+	logger.Info("✅ Metrics successfully initialized", map[string]interface{}{
+		"adapter": cfg.MetricsAdapter,
+	})
 
-	// Register metrics
-	requests, _ = meter.Int64Counter("service_requests")
-	latency, _ = meter.Float64Histogram("request_latency")
-	errorCounter, _ = meter.Int64Counter("request_errors")
-	activeReqs, _ = meter.Int64UpDownCounter("active_requests")
-
-	log.Println("✅ Metrics successfully initialized")
-	return &Metrics{
-		serviceName: serviceName,
-		cfg:         cfg,
-		ctx:         ctx,
-	}, nil
+	return m, nil
 }
 
-// setupPrometheus configures Prometheus metrics exporter.
-func setupPrometheus(cfg *config.ObservabilityConfig) error {
+func setupPrometheus() error {
 	exporter, err := prometheus.New()
 	if err != nil {
-		return fmt.Errorf("failed to initialize Prometheus exporter: %v", err)
+		return fmt.Errorf("failed to initialize Prometheus exporter: %w", err)
 	}
-
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	otel.SetMeterProvider(provider)
 	return nil
 }
 
-// setupDataDog configures DataDog metrics and tracing.
-func setupDataDog(cfg *config.ObservabilityConfig) {
-	tracer.Start(
-		tracer.WithService(cfg.MetricsHost),
-		tracer.WithEnv("development"),
-	)
-	log.Printf("📡 DataDog metrics enabled at %s\n", cfg.MetricsHost)
-}
+// getOrCreateCounter safely registers a counter if not already created
+func (m *Metrics) getOrCreateCounter(name string) metric.Int64Counter {
+	m.registryMutex.Lock()
+	defer m.registryMutex.Unlock()
 
-// Increment increases request count (default 1 unless delta provided).
-func (m *Metrics) Increment(metricName string, delta ...int64) {
-	d := int64(1)
-	if len(delta) > 0 {
-		d = delta[0]
+	if c, ok := m.counters[name]; ok {
+		return c
 	}
-	span, _ := tracer.StartSpanFromContext(m.ctx, metricName)
-	defer span.Finish()
-
-	requests.Add(m.ctx, d)
+	counter, err := m.meter.Int64Counter(name)
+	if err != nil {
+		m.logger.Warn("Failed to register counter", map[string]interface{}{"name": name, "error": err.Error()})
+		return nil
+	}
+	m.counters[name] = counter
+	return counter
 }
 
-// RecordLatency measures request duration.
+// getOrCreateHistogram safely registers a histogram if not already created
+func (m *Metrics) getOrCreateHistogram(name string) metric.Float64Histogram {
+	m.registryMutex.Lock()
+	defer m.registryMutex.Unlock()
+
+	if h, ok := m.histograms[name]; ok {
+		return h
+	}
+	hist, err := m.meter.Float64Histogram(name)
+	if err != nil {
+		m.logger.Warn("Failed to register histogram", map[string]interface{}{"name": name, "error": err.Error()})
+		return nil
+	}
+	m.histograms[name] = hist
+	return hist
+}
+
+// getOrCreateGauge safely registers a gauge if not already created
+func (m *Metrics) getOrCreateGauge(name string) metric.Int64UpDownCounter {
+	m.registryMutex.Lock()
+	defer m.registryMutex.Unlock()
+
+	if g, ok := m.activeGauges[name]; ok {
+		return g
+	}
+	gauge, err := m.meter.Int64UpDownCounter(name)
+	if err != nil {
+		m.logger.Warn("Failed to register gauge", map[string]interface{}{"name": name, "error": err.Error()})
+		return nil
+	}
+	m.activeGauges[name] = gauge
+	return gauge
+}
+
+// Increment increments a counter metric.
+func (m *Metrics) Increment(name string, delta ...int64) {
+	if !m.enabled {
+		return
+	}
+	value := int64(1)
+	if len(delta) > 0 {
+		value = delta[0]
+	}
+	counter := m.getOrCreateCounter(name)
+	if counter != nil {
+		counter.Add(m.ctx, value)
+	}
+}
+
+// IncrementTagged adds a counter value with tags.
+func (m *Metrics) IncrementTagged(name string, tags ...string) {
+	if !m.enabled {
+		return
+	}
+	counter := m.getOrCreateCounter(name)
+	if counter == nil {
+		m.logger.Warn("⚠️ Unknown metric for IncrementTagged", map[string]interface{}{"metric": name})
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, len(tags)/2)
+	for i := 0; i+1 < len(tags); i += 2 {
+		attrs = append(attrs, attribute.String(tags[i], tags[i+1]))
+	}
+	counter.Add(m.ctx, 1, metric.WithAttributes(attrs...))
+}
+
+// ObserveHistogram records a float value to a histogram with optional tags.
+func (m *Metrics) ObserveHistogram(name string, value float64, tags ...string) {
+	if !m.enabled {
+		return
+	}
+	hist := m.getOrCreateHistogram(name)
+	if hist == nil {
+		m.logger.Warn("⚠️ Unknown metric for ObserveHistogram", map[string]interface{}{"metric": name})
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, len(tags)/2)
+	for i := 0; i+1 < len(tags); i += 2 {
+		attrs = append(attrs, attribute.String(tags[i], tags[i+1]))
+	}
+	hist.Record(m.ctx, value, metric.WithAttributes(attrs...))
+}
+
 func (m *Metrics) RecordLatency(duration time.Duration) {
-	latency.Record(m.ctx, duration.Seconds())
+	m.ObserveHistogram("request_latency", duration.Seconds())
 }
 
-// RecordTiming records the duration of an operation with tagging.
 func (m *Metrics) RecordTiming(operation string, duration time.Duration) {
-	latency.Record(m.ctx, duration.Seconds(), metric.WithAttributes(
-		attribute.String("operation", operation),
-	))
+	m.ObserveHistogram("operation_duration", duration.Seconds(), "operation", operation)
 }
 
-// IncrementError tracks failed requests.
 func (m *Metrics) IncrementError() {
-	errorCounter.Add(m.ctx, 1)
+	m.Increment("request_errors")
 }
 
-// TrackActiveRequests adjusts the active request count.
 func (m *Metrics) TrackActiveRequests(delta int64) {
-	activeReqs.Add(m.ctx, delta)
+	gauge := m.getOrCreateGauge("active_requests")
+	if gauge != nil {
+		gauge.Add(m.ctx, delta)
+	}
 }
 
-// Shutdown cleans up DataDog tracing.
 func (m *Metrics) Shutdown() {
 	if m.cfg.MetricsAdapter == "datadog" || m.cfg.MetricsAdapter == "both" {
 		tracer.Stop()

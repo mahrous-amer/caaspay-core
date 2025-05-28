@@ -46,7 +46,7 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 
 	logger := logging.NewLogger(ctx, cfg.Framework.ServiceName, cfg.Framework.Logging.Level, cfg.Framework.Logging.RedactSensitive)
 
-	metricsInstance, err := metrics.NewMetrics(ctx, cfg.Framework.ServiceName, &cfg.Framework.Observability)
+	metricsInstance, err := metrics.NewMetrics(ctx, cfg.Framework.ServiceName, &cfg.Framework.Observability, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize metrics: %w", err)
 	}
@@ -122,21 +122,13 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 	}
 
 	if cfg.Framework.HealthCheck.HeartbeatEnabled {
-		fwCtx.supervisor.Go("framework_heartbeat", func(ctx context.Context) error {
-			ticker := time.NewTicker(cfg.Framework.HealthCheck.HeartbeatInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-ticker.C:
-					if fwCtx.IsHealthy() {
-						fwCtx.logger.Info("💓 Framework heartbeat... all systems healthy", nil)
-					} else {
-						fwCtx.logger.Error("💔 Framework heartbeat... one or more systems unhealthy", nil)
-					}
-				}
+		fwCtx.supervisor.GoLoop("framework_heartbeat", func(ctx context.Context) (time.Duration, error) {
+			if fwCtx.IsHealthy() {
+				fwCtx.logger.Info("💓 Framework heartbeat... all systems healthy", nil)
+			} else {
+				fwCtx.logger.Error("💔 Framework heartbeat... one or more systems unhealthy", nil)
 			}
+			return cfg.Framework.HealthCheck.HeartbeatInterval, nil
 		})
 	}
 
@@ -200,34 +192,68 @@ func (f *FrameworkContext) IsHealthy() bool {
 }
 
 func (f *FrameworkContext) RequestRPC(stream string, input any, output any, timeout time.Duration) error {
+	start := time.Now()
+
+	var timing = struct {
+		validate  time.Duration
+		encode    time.Duration
+		transport time.Duration
+		decode    time.Duration
+	}{}
+
+	// 1. Validate input
 	if validator := f.Validator(); validator != nil {
+		vstart := time.Now()
 		if err := validator.ValidateStruct(input); err != nil {
 			return fmt.Errorf("input validation failed: %w", err)
 		}
+		timing.validate = time.Since(vstart)
 	}
 
+	// 2. Marshal input
+	estart := time.Now()
 	rawArgs, err := json.Marshal(input)
 	if err != nil {
 		return fmt.Errorf("failed to marshal input: %w", err)
 	}
+	timing.encode = time.Since(estart)
 
+	// 3. Prepare and send request
 	msg := api.NewTransportMessage(f.ServiceName(), stream, rawArgs, timeout)
-	// msg.Auth = f.AuthContext()
-	// msg.Context = f.RequestContext()
-
+	tstart := time.Now()
 	respBytes, err := f.Transport().Request(stream, msg, timeout)
+	timing.transport = time.Since(tstart)
+
 	if err != nil {
 		return fmt.Errorf("transport request failed: %w", err)
 	}
 
+	// 4. Decode response
+	dstart := time.Now()
 	respMsg, err := api.DecodeTransportMessage(respBytes)
 	if err != nil {
 		return fmt.Errorf("failed to decode TransportMessage: %w", err)
 	}
-
 	if err := json.Unmarshal(respMsg.Response, output); err != nil {
 		return fmt.Errorf("failed to decode response: %w", err)
 	}
+	timing.decode = time.Since(dstart)
+
+	// 5. Optional: log or record metrics
+	total := time.Since(start)
+	f.Metrics().ObserveHistogram("framework.rpc.total", total.Seconds(), "stream", stream)
+	f.Metrics().ObserveHistogram("framework.rpc.encode", timing.encode.Seconds(), "stream", stream)
+	f.Metrics().ObserveHistogram("framework.rpc.transport", timing.transport.Seconds(), "stream", stream)
+	f.Metrics().ObserveHistogram("framework.rpc.decode", timing.decode.Seconds(), "stream", stream)
+
+	f.Logger().Info("⏱️ RPC Request Timings", map[string]interface{}{
+		"stream":       stream,
+		"validate_ms":  timing.validate.Milliseconds(),
+		"encode_ms":    timing.encode.Milliseconds(),
+		"transport_ms": timing.transport.Milliseconds(),
+		"decode_ms":    timing.decode.Milliseconds(),
+		"total_ms":     total.Milliseconds(),
+	})
 
 	return nil
 }

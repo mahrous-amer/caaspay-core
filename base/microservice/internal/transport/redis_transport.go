@@ -220,7 +220,7 @@ func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *met
 	}
 
 	if rt.redisCfg.PeriodicTrimFreq > 0 && rt.redisCfg.StreamTrimMaxLen > 0 {
-		sup.GoLoop("redis_periodic_trim", rt.redisCfg.PeriodicTrimFreq, func(ctx context.Context) error {
+		sup.GoLoop("redis_periodic_trim", func(ctx context.Context) (time.Duration, error) {
 			rt.streamsCreated.Range(func(key, value any) bool {
 				stream := key.(string)
 				meta, ok := value.(StreamMeta)
@@ -259,7 +259,7 @@ func NewRedisTransport(ctx context.Context, logger *logging.Logger, metrics *met
 
 				return true
 			})
-			return nil
+			return rt.redisCfg.PeriodicTrimFreq, nil
 		})
 	}
 
@@ -348,6 +348,10 @@ func (r *RedisTransport) ensureConsumerGroup(group, stream string, meta StreamMe
 }
 
 func (r *RedisTransport) collectStreamStats(stream string) (*StreamStats, error) {
+	if errors.Is(r.ctx.Err(), context.Canceled) {
+		r.logger.Info("Skipping XInfoStream due to context cancellation", map[string]interface{}{"stream": stream})
+		return nil, nil
+	}
 	// XINFO STREAM
 	streamInfo, err := r.client.XInfoStream(r.ctx, stream).Result()
 	if err != nil {
@@ -542,7 +546,7 @@ func (r *RedisTransport) Request(stream string, msg *api.TransportMessage, timeo
 		}).Err()
 	}
 
-	if err := Retry(r.maxRetries, r.retryDelay, addOp); err != nil {
+	if err := Retry(r.ctx, r.maxRetries, r.retryDelay, addOp); err != nil {
 		r.logger.Error("Failed to send request after retries", map[string]interface{}{"error": err.Error()})
 		return nil, fmt.Errorf("failed to send request after retries: %w", err)
 	}
@@ -702,39 +706,52 @@ func (r *RedisTransport) cleanupExpiredPendingMessages(stream, group string) err
 	return nil
 }
 
-func (r *RedisTransport) Publish(stream string, data []byte) error {
+func (r *RedisTransport) Publish(ctx context.Context, stream string, data []byte) error {
 	encodedData, err := r.prepareData(data)
 	if err != nil {
 		r.logger.Error("prepareData error in Publish", map[string]interface{}{"error": err.Error()})
 		return err
 	}
 	r.registerStream(stream, StreamMeta{
-		ToTrim: r.redisCfg.StreamTrimMaxLen > 0,
+		//ToTrim: r.redisCfg.StreamTrimMaxLen > 0,
+		ToTrim: true,
 	})
 	if r.isStreamOverflowing(stream) {
 		return fmt.Errorf("stream %s is currently overflowing, throttling in place", stream)
 	}
 	addOp := func() error {
-		_, err := r.client.XAdd(r.ctx, &redis.XAddArgs{
+		_, err := r.client.XAdd(ctx, &redis.XAddArgs{
 			Stream: stream,
 			Values: map[string]interface{}{"body": encodedData},
 		}).Result()
 		return err
 	}
-	if err := Retry(r.maxRetries, r.retryDelay, addOp); err != nil {
+	if err := Retry(ctx, r.maxRetries, r.retryDelay, addOp); err != nil {
 		r.logger.Error("Failed to publish message after retries", map[string]interface{}{"error": err.Error()})
-		if dlqErr := PublishToDLQ(r.ctx, r.client, r.dlqStream, stream, encodedData); dlqErr != nil {
+		if dlqErr := PublishToDLQ(ctx, r.client, r.dlqStream, stream, encodedData); dlqErr != nil {
 			r.logger.Error("Failed to publish to DLQ", map[string]interface{}{"error": dlqErr.Error()})
 		}
 		return fmt.Errorf("failed to publish message after retries: %w", err)
 	}
 
-	r.logger.Info("Publishing message", map[string]interface{}{
+	r.logger.Trace("Publishing message", map[string]interface{}{
 		"stream": stream,
 		"size":   len(data),
 	})
 
 	return nil
+}
+
+func (r *RedisTransport) Emit(stream string, msg *api.TransportMessage) error {
+	encoded, err := msg.Encode()
+	if err != nil {
+		r.logger.Error("Emit: failed to encode message", map[string]interface{}{
+			"stream": stream,
+			"error":  err.Error(),
+		})
+		return err
+	}
+	return r.Publish(r.ctx, stream, encoded)
 }
 
 func (r *RedisTransport) Subscribe(consumerGroup string, stream string, handler api.HandlerFunc) error {

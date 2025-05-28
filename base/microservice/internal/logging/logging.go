@@ -53,22 +53,22 @@ func (l *Logger) Log(level, message string, fields map[string]interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	spanCtx := trace.SpanContextFromContext(l.ctx)
-	traceID := spanCtx.TraceID().String()
-	spanID := spanCtx.SpanID().String()
+	//	spanCtx := trace.SpanContextFromContext(l.ctx)
+	//	traceID := spanCtx.TraceID().String()
+	//	spanID := spanCtx.SpanID().String()
 
 	if l.redact {
 		fields = redactSensitiveData(fields)
 	}
 
 	logEntry := map[string]interface{}{
-		"time":     time.Now().Format(time.RFC3339),
-		"level":    level,
-		"service":  l.serviceName,
-		"message":  message,
-		"trace_id": traceID,
-		"span_id":  spanID,
-		"fields":   fields,
+		"time":    time.Now().Format(time.RFC3339),
+		"level":   level,
+		"service": l.serviceName,
+		"message": message,
+		//		"trace_id": traceID,
+		//		"span_id":  spanID,
+		"fields": fields,
 	}
 
 	logJSON, _ := json.Marshal(logEntry)
@@ -90,6 +90,13 @@ func (l *Logger) Info(message string, fields map[string]interface{}) {
 func (l *Logger) Debug(message string, fields map[string]interface{}) {
 	if l.logLevel == LevelDebug {
 		l.Log(LevelDebug, message, fields)
+	}
+}
+
+// Trace logs debug messages.
+func (l *Logger) Trace(message string, fields map[string]interface{}) {
+	if l.logLevel == LevelTrace {
+		l.Log(LevelTrace, message, fields)
 	}
 }
 

@@ -25,10 +25,12 @@ type LoggerInterface interface {
 // --- Metrics ---
 type MetricsInterface interface {
 	Increment(metricName string, delta ...int64)
+	IncrementTagged(name string, tags ...string)
 	RecordLatency(duration time.Duration)
 	RecordTiming(operation string, duration time.Duration)
 	IncrementError()
 	TrackActiveRequests(delta int64)
+	ObserveHistogram(name string, value float64, tags ...string)
 	Shutdown()
 }
 
@@ -56,7 +58,7 @@ type ValidatorInterface interface {
 type SupervisorInterface interface {
 	// Go launches a managed goroutine that can report failure.
 	Go(name string, fn func(ctx context.Context) error)
-	GoLoop(name string, interval time.Duration, fn func(ctx context.Context) error)
+	GoLoop(name string, fn func(ctx context.Context) (time.Duration, error))
 
 	// WaitAndShutdown blocks until an error or shutdown occurs, and runs shutdown logic.
 	WaitAndShutdown(onShutdown func())
@@ -94,9 +96,10 @@ type FrameworkContextInterface interface {
 
 // TransportInterface defines the messaging transport interface for pluggable broker backends.
 type TransportInterface interface {
-	Publish(stream string, data []byte) error
+	Publish(ctx context.Context, stream string, data []byte) error
 	Request(stream string, msg *TransportMessage, timeout time.Duration) ([]byte, error)
 	Subscribe(consumerGroup string, stream string, handler HandlerFunc) error
+	Emit(stream string, msg *TransportMessage) error
 	Close() error
 	IsHealthy() bool
 	CleanupOnShutdown()
