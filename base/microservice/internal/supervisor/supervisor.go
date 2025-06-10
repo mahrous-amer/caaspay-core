@@ -99,6 +99,10 @@ func (s *Supervisor) Go(name string, fn func(ctx context.Context) error) {
 	s.logger.Info("🚀 Supervisor started goroutine", map[string]interface{}{"name": finalName})
 }
 
+func (s *Supervisor) ErrorChannel() <-chan error {
+	return s.errChan
+}
+
 func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) (time.Duration, error)) {
 	s.wg.Add(1)
 	subCtx, subCancel := context.WithCancel(s.ctx)
@@ -126,7 +130,7 @@ func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) (time.Dura
 			start := time.Now()
 			nextInterval, err := fn(subCtx)
 			if err != nil {
-				s.logger.Error("💥 Supervisor loop error, triggering shutdown", map[string]interface{}{"name": finalName, "error": err.Error()})
+				//s.logger.Error("💥 Supervisor loop error, triggering shutdown", map[string]interface{}{"name": finalName, "error": err.Error()})
 				select {
 				case s.errChan <- err:
 				default:
@@ -157,8 +161,8 @@ func (s *Supervisor) WaitAndShutdown(onShutdown func()) {
 	select {
 	case <-s.ctx.Done():
 		s.logger.Info("🛑 Shutdown triggered by context cancellation", nil)
-	case err := <-s.errChan:
-		s.logger.Error("💥 Shutdown due to error", map[string]interface{}{"error": err.Error()})
+		//case err := <-s.errChan:
+		//	s.logger.Error("💥 Shutdown due to error", map[string]interface{}{"error": err.Error()})
 	}
 
 	s.logger.Info("📋 Waiting for goroutines to finish...", nil)

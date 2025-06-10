@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	//"math/rand"
+	"errors"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -58,26 +59,26 @@ func newPingService(ctx api.FrameworkContextInterface) api.ServiceInterface {
 	s := &pingService{
 		ctx:         ctx,
 		uptimeStart: time.Now(),
-		emitChan:    make(chan *api.TransportMessage, 10),
+		emitChan:    make(chan *api.TransportMessage, 1),
 	}
 
 	return s
 }
 
-func (s *pingService) Start() error {
+func (s *pingService) Start(ctx context.Context) error {
 	s.ctx.Logger().Info("🚀 pingService.Start called", nil)
 	s.healthy = true
 	return nil
 }
 
-func (s *pingService) Stop() error {
+func (s *pingService) Stop(ctx context.Context) error {
 	s.ctx.Logger().Info("🛑 pingService.Stop called", nil)
 	s.healthy = false
 	close(s.emitChan)
 	return nil
 }
 
-func (s *pingService) HealthCheck() error {
+func (s *pingService) HealthCheck(ctx context.Context) error {
 	c := atomic.AddInt32(&s.callerCount, 1)
 	//s.ctx.Supervisor().GoLoop("call_rpc_healthcheck", func(ctx context.Context) (time.Duration, error) {
 	n := atomic.AddInt32(&s.pingReq, 1)
@@ -87,7 +88,14 @@ func (s *pingService) HealthCheck() error {
 	if err := s.ctx.RequestRPC(stream, req, &resp, 50*time.Second); err != nil {
 		//	return 2 * time.Second, fmt.Errorf("rpc ping request failed: %w", err)
 	}
-	s.ctx.Logger().Info("✅ Healthcheck RPC_Ping passed", map[string]interface{}{
+	s.ctx.Logger().Info("✅ ✅✅✅✅✅✅✅✅Healthcheck RPC_Ping passed", map[string]interface{}{
+		"response": resp.Response,
+		"echo":     resp.Input,
+	})
+	if err := s.ctx.RequestRPC(stream, req, &resp, 50*time.Second); err != nil {
+		//	return 2 * time.Second, fmt.Errorf("rpc ping request failed: %w", err)
+	}
+	s.ctx.Logger().Info("✅ ✅✅✅✅✅✅✅✅Healthcheck2 RPC_Ping passed", map[string]interface{}{
 		"response": resp.Response,
 		"echo":     resp.Input,
 	})
@@ -109,7 +117,7 @@ func (s *pingService) HealthCheck() error {
 	return nil
 }
 
-func (s *pingService) RPC_Ping(input PingRequest) (PingResponse, error) {
+func (s *pingService) RPC_Ping(ctx context.Context, input PingRequest) (PingResponse, error) {
 	s.pingLock.Lock()
 	defer s.pingLock.Unlock()
 	n := atomic.AddInt32(&s.pingCount, 1)
@@ -121,11 +129,11 @@ func (s *pingService) RPC_Ping(input PingRequest) (PingResponse, error) {
 }
 
 func (s *pingService) EmitterPull_Heartbeat(ctx context.Context) ([]*api.TransportMessage, time.Duration, error) {
-	select {
-	case <-ctx.Done():
-		return nil, 0, ctx.Err()
-	default:
-	}
+	//select {
+	//case <-ctx.Done():
+	//	return nil, 0, ctx.Err()
+	//default:
+	//}
 
 	heartbeat := HeartbeatMessage{
 		Node:   s.ctx.ServiceName(),
@@ -178,11 +186,11 @@ func (s *pingService) EmitterChannel_PushLog(ctx context.Context, ch chan *api.T
 //}
 
 func (s *pingService) Receiver_example__service_Heartbeat(ctx context.Context, msg *HeartbeatMessage) error {
-	//	s.ctx.Logger().Info("✅ Heartbeat received", map[string]interface{}{
-	//		"node":   msg.Node,
-	//		"status": msg.Status,
-	//		"uptime": msg.Uptime,
-	//	})
+	//s.ctx.Logger().Info("✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅ Heartbeat received", map[string]interface{}{
+	//	"node":   msg.Node,
+	//	"status": msg.Status,
+	//	"uptime": msg.Uptime,
+	//})
 	return nil
 }
 
@@ -192,6 +200,9 @@ func (s *pingService) Receiver_example__service_Pushlog(ctx context.Context, msg
 		"ts":     msg.Ts,
 		"uptime": msg.Uptime,
 	})
+	if false {
+		return errors.New("test error from Pushlog receiver")
+	}
 	return nil
 }
 

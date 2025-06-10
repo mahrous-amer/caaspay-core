@@ -13,11 +13,13 @@ import (
 type HealthServer struct {
 	service *ServiceStruct
 	server  *http.Server
+	ctx     context.Context
 }
 
 // NewHealthServer initializes a new health server using configuration.
 func NewHealthServer(service *ServiceStruct) *HealthServer {
 	cfg := service.frameworkCtx.Config().Framework.HealthCheck
+	ctx := service.frameworkCtx.Context()
 
 	mux := http.NewServeMux()
 	healthServer := &HealthServer{
@@ -26,6 +28,7 @@ func NewHealthServer(service *ServiceStruct) *HealthServer {
 			Addr:    fmt.Sprintf(":%d", cfg.HTTPServerPort),
 			Handler: mux,
 		},
+		ctx: ctx,
 	}
 
 	// Attach handlers based on config
@@ -60,7 +63,7 @@ func (h *HealthServer) Start() {
 
 // Stop gracefully shuts down the HTTP server.
 func (h *HealthServer) Stop() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(h.ctx, 5*time.Second)
 	defer cancel()
 
 	h.service.frameworkCtx.Logger().Info("🛑 Shutting down health server...", nil)

@@ -12,6 +12,7 @@ import (
 
 // TransportMessage is the core message structure for all Redis-based communications.
 type TransportMessage struct {
+	ID          string            `json:"id"`
 	MessageID   string            `json:"message_id"`
 	TransportID string            `json:"transport_id"`
 	Service     string            `json:"service"`
@@ -86,16 +87,17 @@ func (m *TransportMessage) Validate() error {
 }
 
 // Marshal encodes the message to JSON.
-func (m *TransportMessage) Encode() ([]byte, error) {
+func (m *TransportMessage) ToJson() ([]byte, error) {
 	return json.Marshal(m)
 }
 
 // UnmarshalTransportMessage decodes the message from JSON.
-func DecodeTransportMessage(data []byte) (*TransportMessage, error) {
+func DecodeTransportMessage(data []byte, transportID string) (*TransportMessage, error) {
 	var msg TransportMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil, err
 	}
+	msg.TransportID = transportID
 	if err := msg.Validate(); err != nil {
 		return nil, err
 	}

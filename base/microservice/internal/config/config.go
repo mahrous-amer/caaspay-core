@@ -60,6 +60,7 @@ type TransportConfig struct {
 
 	ServiceReplyStream      string        `mapstructure:"service_reply_stream"`       // Default reply stream for RPC
 	ResponseOnServiceStream bool          `mapstructure:"response_on_service_stream"` // Use service stream for responses
+	ResponseStreamSubOnce   bool          `mapstructure:"response_stream_sub_once"`   // Subscribe to RPC response stream once throuout or on every request
 	DLQStream               string        `mapstructure:"dlq_stream"`                 // Dead-letter stream for failed messages
 	MoveExpiredToDLQ        bool          `mapstructure:"move_expired_to_dlq"`        // move expired messages to DLQ
 	MaxRetries              int           `mapstructure:"max_retries"`                // Retry attempts for transient failures
@@ -280,6 +281,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.transport.redis_addr", []string{"redis_7:6379"})
 	v.SetDefault("framework.transport.use_cluster", false)
 	v.SetDefault("framework.transport.response_on_service_stream", false)
+	v.SetDefault("framework.transport.response_stream_sub_once", true)
 	v.SetDefault("framework.transport.pool_size", 10)
 	v.SetDefault("framework.transport.min_idle_conns", 2)
 	v.SetDefault("framework.transport.stream_read_count", 10)

@@ -1,12 +1,13 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
 
 // HandlerFunc defines a callback for processing incoming messages.
-type HandlerFunc func(request []byte) ([]byte, error)
+type HandlerFunc func(ctx context.Context, request *TransportMessage) (*TransportMessage, error)
 
 // StreamType represents the kind of stream: RPC, emitter, receiver.
 type StreamType string

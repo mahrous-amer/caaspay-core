@@ -37,11 +37,11 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 	fwCtx.Logger().Info("✅ Service initialized", nil)
 
 	// Step 5: Start the main service (not under supervisor)
-	fwCtx.Supervisor().Go("service.run", func(ctx context.Context) error {
-		fwCtx.Logger().Info("🚀 Service is starting...", nil)
-		svcStruct.Run()
-		return nil
-	})
+	//	fwCtx.Supervisor().Go(rootCtx, "service.run", func(ctx context.Context) error {
+	fwCtx.Logger().Info("🚀 Service is starting...", nil)
+	svcStruct.Run()
+	//	return nil
+	//})
 
 	// Step 6: Trap OS signals for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -56,6 +56,8 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 		case <-ctx.Done():
 			fwCtx.Logger().Info("🛑 Signal handler context canceled", nil)
 			return nil
+		case err := <-fwCtx.Supervisor().ErrorChannel():
+			fwCtx.Logger().Error("💥 Shutting down due error in a supervised method", map[string]interface{}{"error": err.Error()})
 		}
 
 		fwCtx.Logger().Info("🛑 Initiating graceful shutdown...", nil)

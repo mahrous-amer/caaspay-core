@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/compliance"
@@ -66,6 +67,7 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 		EncryptionKey:           cfg.Framework.Transport.EncryptionKey,
 		ServiceReplyStream:      fmt.Sprintf("%s_reply", cfg.Framework.ServiceName),
 		ResponseOnServiceStream: cfg.Framework.Transport.ResponseOnServiceStream,
+		ResponseStreamSubOnce:   cfg.Framework.Transport.ResponseStreamSubOnce,
 		MaxRetries:              cfg.Framework.Transport.MaxRetries,
 		RetryDelay:              cfg.Framework.Transport.RetryDelay,
 		ReadTimeout:             cfg.Framework.Transport.ReadTimeout,
@@ -149,6 +151,8 @@ func (f *FrameworkContext) Context() context.Context             { return f.ctx 
 func (f *FrameworkContext) SetService(s api.ServiceInterface)    { f.service = s }
 func (f *FrameworkContext) Service() api.ServiceInterface        { return f.service }
 
+//func (f *FrameworkContext) Shutdown(ctx context.Context)         { f.service.Shutdown(ctx) }
+
 func (f *FrameworkContext) BuildStreamName(kind api.StreamType, service, method string) string {
 	return transport.BuildStreamName(api.StreamConfig{
 		Type:    kind,
@@ -176,7 +180,7 @@ func (f *FrameworkContext) IsHealthy() bool {
 	}
 
 	if f.service != nil {
-		if err := f.service.HealthCheck(); err != nil {
+		if err := f.service.HealthCheck(f.ctx); err != nil {
 			f.logger.Error("🚨 Service health check failed", map[string]interface{}{"error": err.Error()})
 			healthy = false
 		}
@@ -221,19 +225,25 @@ func (f *FrameworkContext) RequestRPC(stream string, input any, output any, time
 	// 3. Prepare and send request
 	msg := api.NewTransportMessage(f.ServiceName(), stream, rawArgs, timeout)
 	tstart := time.Now()
-	respBytes, err := f.Transport().Request(stream, msg, timeout)
+
+	_, _, line, ok := runtime.Caller(1) // 1 = skip current function
+	caller := "unknown"
+	if ok {
+		caller = fmt.Sprintf("%d", line)
+	}
+	respMsg, err := f.Transport().Request(f.ctx, stream, msg, timeout, caller)
 	timing.transport = time.Since(tstart)
 
 	if err != nil {
 		return fmt.Errorf("transport request failed: %w", err)
 	}
 
-	// 4. Decode response
+	//// 4. Decode response
 	dstart := time.Now()
-	respMsg, err := api.DecodeTransportMessage(respBytes)
-	if err != nil {
-		return fmt.Errorf("failed to decode TransportMessage: %w", err)
-	}
+	//respMsg, err := api.DecodeTransportMessage(respBytes)
+	//if err != nil {
+	//	return fmt.Errorf("failed to decode TransportMessage: %w", err)
+	//}
 	if err := json.Unmarshal(respMsg.Response, output); err != nil {
 		return fmt.Errorf("failed to decode response: %w", err)
 	}
@@ -244,15 +254,15 @@ func (f *FrameworkContext) RequestRPC(stream string, input any, output any, time
 	f.Metrics().ObserveHistogram("framework.rpc.total", total.Seconds(), "stream", stream)
 	f.Metrics().ObserveHistogram("framework.rpc.encode", timing.encode.Seconds(), "stream", stream)
 	f.Metrics().ObserveHistogram("framework.rpc.transport", timing.transport.Seconds(), "stream", stream)
-	f.Metrics().ObserveHistogram("framework.rpc.decode", timing.decode.Seconds(), "stream", stream)
+	//f.Metrics().ObserveHistogram("framework.rpc.decode", timing.decode.Seconds(), "stream", stream)
 
 	f.Logger().Info("⏱️ RPC Request Timings", map[string]interface{}{
 		"stream":       stream,
 		"validate_ms":  timing.validate.Milliseconds(),
 		"encode_ms":    timing.encode.Milliseconds(),
 		"transport_ms": timing.transport.Milliseconds(),
-		"decode_ms":    timing.decode.Milliseconds(),
-		"total_ms":     total.Milliseconds(),
+		//		"decode_ms":    timing.decode.Milliseconds(),
+		"total_ms": total.Milliseconds(),
 	})
 
 	return nil

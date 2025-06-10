@@ -9,9 +9,9 @@ import (
 
 // --- Service Lifecycle Interface ---
 type ServiceInterface interface {
-	Start() error
-	Stop() error
-	HealthCheck() error
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+	HealthCheck(ctx context.Context) error
 }
 
 // --- Logger ---
@@ -20,6 +20,7 @@ type LoggerInterface interface {
 	Error(message string, fields map[string]interface{})
 	Warn(message string, fields map[string]interface{})
 	Debug(message string, fields map[string]interface{})
+	Fatal(message string, fields map[string]interface{})
 }
 
 // --- Metrics ---
@@ -71,6 +72,7 @@ type SupervisorInterface interface {
 
 	// StopAll is optionally used for forced termination or post-processing logic.
 	StopAll()
+	ErrorChannel() <-chan error
 }
 
 // --- Framework Context (Container) ---
@@ -97,10 +99,11 @@ type FrameworkContextInterface interface {
 // TransportInterface defines the messaging transport interface for pluggable broker backends.
 type TransportInterface interface {
 	Publish(ctx context.Context, stream string, data []byte) error
-	Request(stream string, msg *TransportMessage, timeout time.Duration) ([]byte, error)
-	Subscribe(consumerGroup string, stream string, handler HandlerFunc) error
-	Emit(stream string, msg *TransportMessage) error
+	Request(ctx context.Context, stream string, msg *TransportMessage, timeout time.Duration, caller string) (*TransportMessage, error)
+	Subscribe(ctx context.Context, consumerGroup string, stream string, handler HandlerFunc, checkDeadline bool) error
+	Emit(ctx context.Context, stream string, msg *TransportMessage) error
 	Close() error
 	IsHealthy() bool
 	CleanupOnShutdown()
+	CleanupOnStartup()
 }
