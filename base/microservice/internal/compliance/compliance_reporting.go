@@ -44,7 +44,7 @@ func (cr *ComplianceReporter) TrackEvent(eventName string) {
 	_, span := cr.tracer.StartSpan(eventName)
 	defer span.End()
 
-	cr.log.Info("🔍 Compliance Event", map[string]interface{}{
+	cr.log.Info(cr.ctx, "🔍 Compliance Event", map[string]interface{}{
 		"event":   eventName,
 		"traceID": span.SpanContext().TraceID().String(),
 		"app":     cr.appName,

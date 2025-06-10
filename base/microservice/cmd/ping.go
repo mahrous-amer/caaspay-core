@@ -66,13 +66,13 @@ func newPingService(ctx api.FrameworkContextInterface) api.ServiceInterface {
 }
 
 func (s *pingService) Start(ctx context.Context) error {
-	s.ctx.Logger().Info("🚀 pingService.Start called", nil)
+	s.ctx.Logger().Info(ctx, "🚀 pingService.Start called", nil)
 	s.healthy = true
 	return nil
 }
 
 func (s *pingService) Stop(ctx context.Context) error {
-	s.ctx.Logger().Info("🛑 pingService.Stop called", nil)
+	s.ctx.Logger().Info(ctx, "🛑 pingService.Stop called", nil)
 	s.healthy = false
 	close(s.emitChan)
 	return nil
@@ -88,14 +88,14 @@ func (s *pingService) HealthCheck(ctx context.Context) error {
 	if err := s.ctx.RequestRPC(stream, req, &resp, 50*time.Second); err != nil {
 		//	return 2 * time.Second, fmt.Errorf("rpc ping request failed: %w", err)
 	}
-	s.ctx.Logger().Info("✅ ✅✅✅✅✅✅✅✅Healthcheck RPC_Ping passed", map[string]interface{}{
+	s.ctx.Logger().Info(ctx, "✅ ✅✅✅✅✅✅✅✅Healthcheck RPC_Ping passed", map[string]interface{}{
 		"response": resp.Response,
 		"echo":     resp.Input,
 	})
 	if err := s.ctx.RequestRPC(stream, req, &resp, 50*time.Second); err != nil {
 		//	return 2 * time.Second, fmt.Errorf("rpc ping request failed: %w", err)
 	}
-	s.ctx.Logger().Info("✅ ✅✅✅✅✅✅✅✅Healthcheck2 RPC_Ping passed", map[string]interface{}{
+	s.ctx.Logger().Info(ctx, "✅ ✅✅✅✅✅✅✅✅Healthcheck2 RPC_Ping passed", map[string]interface{}{
 		"response": resp.Response,
 		"echo":     resp.Input,
 	})
@@ -121,7 +121,7 @@ func (s *pingService) RPC_Ping(ctx context.Context, input PingRequest) (PingResp
 	s.pingLock.Lock()
 	defer s.pingLock.Unlock()
 	n := atomic.AddInt32(&s.pingCount, 1)
-	s.ctx.Logger().Info(fmt.Sprintf("📡 RPC_Ping invoked %d", n), nil)
+	s.ctx.Logger().Info(ctx, fmt.Sprintf("📡 RPC_Ping invoked %d", n), nil)
 	return PingResponse{
 		Response: fmt.Sprintf("pong %d", n),
 		Input:    map[string]interface{}{"message": input.Message},
@@ -195,7 +195,7 @@ func (s *pingService) Receiver_example__service_Heartbeat(ctx context.Context, m
 }
 
 func (s *pingService) Receiver_example__service_Pushlog(ctx context.Context, msg *PushlogMessage) error {
-	s.ctx.Logger().Info("✅ Pushlog received", map[string]interface{}{
+	s.ctx.Logger().Info(ctx, "✅ Pushlog received", map[string]interface{}{
 		"note":   msg.Note,
 		"ts":     msg.Ts,
 		"uptime": msg.Uptime,

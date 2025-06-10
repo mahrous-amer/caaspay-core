@@ -16,11 +16,11 @@ type ServiceInterface interface {
 
 // --- Logger ---
 type LoggerInterface interface {
-	Info(message string, fields map[string]interface{})
-	Error(message string, fields map[string]interface{})
-	Warn(message string, fields map[string]interface{})
-	Debug(message string, fields map[string]interface{})
-	Fatal(message string, fields map[string]interface{})
+	Info(ctx context.Context, message string, fields map[string]interface{})
+	Error(ctx context.Context, message string, fields map[string]interface{})
+	Warn(ctx context.Context, message string, fields map[string]interface{})
+	Debug(ctx context.Context, message string, fields map[string]interface{})
+	Fatal(ctx context.Context, message string, fields map[string]interface{})
 }
 
 // --- Metrics ---

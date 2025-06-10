@@ -196,7 +196,7 @@ func NewRedisTransport(RootCtx context.Context, logger *logging.Logger, metrics 
 	for {
 		trials++
 		if err := rt.verifyConnection(); err != nil {
-			logger.Error("⏳ RedisTransport connection failed, retrying...", map[string]interface{}{
+			logger.Error(ctx, "⏳ RedisTransport connection failed, retrying...", map[string]interface{}{
 
 				"error": err.Error(),
 				"trial": trials,
@@ -204,7 +204,7 @@ func NewRedisTransport(RootCtx context.Context, logger *logging.Logger, metrics 
 			})
 			if trials >= maxRetries {
 
-				logger.Error("❌ RedisTransport connection verification failed", map[string]interface{}{
+				logger.Error(ctx, "❌ RedisTransport connection verification failed", map[string]interface{}{
 					"error": err.Error(),
 					"trial": trials,
 				})
@@ -214,7 +214,7 @@ func NewRedisTransport(RootCtx context.Context, logger *logging.Logger, metrics 
 			continue
 		}
 
-		logger.Info("✅ RedisTransport connected successfully", map[string]interface{}{
+		logger.Info(ctx, "✅ RedisTransport connected successfully", map[string]interface{}{
 			"cluster":     cfg.UseCluster,
 			"pool_size":   cfg.PoolSize,
 			"min_idle":    cfg.MinIdleConns,
@@ -235,7 +235,7 @@ func NewRedisTransport(RootCtx context.Context, logger *logging.Logger, metrics 
 
 				stats, err := rt.collectStreamStats(stream)
 				if err != nil {
-					rt.logger.Warn("Failed to collect stream stats", map[string]interface{}{"stream": stream, "error": err.Error()})
+					rt.logger.Warn(ctx, "Failed to collect stream stats", map[string]interface{}{"stream": stream, "error": err.Error()})
 					return true
 				}
 
@@ -243,7 +243,7 @@ func NewRedisTransport(RootCtx context.Context, logger *logging.Logger, metrics 
 				overflowing := false
 				for _, group := range stats.Groups {
 					if group.Lag > rt.redisCfg.StreamTrimMaxLen {
-						rt.logger.Warn("Stream is overflowing", map[string]interface{}{
+						rt.logger.Warn(ctx, "Stream is overflowing", map[string]interface{}{
 							"stream": stream,
 							"group":  group.Name,
 							"lag":    group.Lag,
@@ -272,7 +272,7 @@ func NewRedisTransport(RootCtx context.Context, logger *logging.Logger, metrics 
 }
 
 func (r *RedisTransport) Close() error {
-	r.logger.Info("🔒 Closing RedisTransport", nil)
+	r.logger.Info(r.ctx, "🔒 Closing RedisTransport", nil)
 
 	// Cancel internal context to stop any background routines
 	if r.cancelFunc != nil {
@@ -309,7 +309,7 @@ func (r *RedisTransport) IsHealthy() bool {
 
 		// Skip trimming and stats if context is already canceled
 		if ctx.Err() != nil {
-			r.logger.Info("⏭️ Skipping health check for stream due to context cancellation", map[string]interface{}{
+			r.logger.Info(r.ctx, "⏭️ Skipping health check for stream due to context cancellation", map[string]interface{}{
 				"stream": stream,
 			})
 			return false
@@ -320,7 +320,7 @@ func (r *RedisTransport) IsHealthy() bool {
 		}
 
 		stats, _ := r.collectStreamStats(stream)
-		r.logger.Info("📊 Stream stats", map[string]interface{}{
+		r.logger.Info(ctx, "📊 Stream stats", map[string]interface{}{
 			"stream": stream,
 			"stats":  stats,
 		})
@@ -328,8 +328,8 @@ func (r *RedisTransport) IsHealthy() bool {
 		return true
 	})
 
-	if err := r.client.Ping(r.ctx).Err(); err != nil {
-		r.logger.Warn("❌ Redis PING failed", map[string]interface{}{"error": err.Error()})
+	if err := r.client.Ping(ctx).Err(); err != nil {
+		r.logger.Warn(ctx, "❌ Redis PING failed", map[string]interface{}{"error": err.Error()})
 		return false
 	}
 
@@ -404,13 +404,13 @@ func (r *RedisTransport) verifyConnection() error {
 	}
 
 	if err := r.client.Ping(ctx).Err(); err != nil {
-		r.logger.Warn("❌ Redis ping failed during verifyConnection", map[string]interface{}{
+		r.logger.Warn(ctx, "❌ Redis ping failed during verifyConnection", map[string]interface{}{
 			"error": err.Error(),
 		})
 		return err
 	}
 
-	r.logger.Trace("✅ Redis ping successful in verifyConnection", nil)
+	r.logger.Debug(ctx, "✅ Redis ping successful in verifyConnection", nil)
 	return nil
 }
 
@@ -432,7 +432,7 @@ func (r *RedisTransport) ensureConsumerGroup(group, stream string, meta StreamMe
 			err = r.client.XGroupCreateMkStream(ctx, stream, group, "$").Err()
 			if err != nil {
 				// Final fallback log
-				r.logger.Error("❌ Failed to create consumer group after retry", map[string]interface{}{
+				r.logger.Error(ctx, "❌ Failed to create consumer group after retry", map[string]interface{}{
 					"stream": stream,
 					"group":  group,
 					"error":  err.Error(),
@@ -440,7 +440,7 @@ func (r *RedisTransport) ensureConsumerGroup(group, stream string, meta StreamMe
 				return err
 			}
 		} else {
-			r.logger.Error("❌ Failed to create consumer group", map[string]interface{}{
+			r.logger.Error(ctx, "❌ Failed to create consumer group", map[string]interface{}{
 				"stream": stream,
 				"group":  group,
 				"error":  err.Error(),
@@ -457,7 +457,7 @@ func (r *RedisTransport) ensureConsumerGroup(group, stream string, meta StreamMe
 	if meta.ToCleanPending {
 		key := stream + "::" + group
 		if _, loaded := r.pendingCleanups.LoadOrStore(key, true); !loaded {
-			r.logger.Info("🧼 Starting pending cleanup for group", map[string]interface{}{
+			r.logger.Info(ctx, "🧼 Starting pending cleanup for group", map[string]interface{}{
 				"stream": stream,
 				"group":  group,
 			})
@@ -469,7 +469,7 @@ func (r *RedisTransport) ensureConsumerGroup(group, stream string, meta StreamMe
 		}
 	}
 
-	r.logger.Debug("✅ Consumer group ensured", map[string]interface{}{
+	r.logger.Debug(ctx, "✅ Consumer group ensured", map[string]interface{}{
 		"stream": stream,
 		"group":  group,
 	})
@@ -480,14 +480,14 @@ func (r *RedisTransport) ensureConsumerGroup(group, stream string, meta StreamMe
 func (r *RedisTransport) collectStreamStats(stream string) (*StreamStats, error) {
 	// Check if context is cancelled
 	if r.ctx.Err() != nil {
-		r.logger.Info("Skipping XInfoStream due to context cancellation", map[string]interface{}{"stream": stream})
+		r.logger.Info(r.ctx, "Skipping XInfoStream due to context cancellation", map[string]interface{}{"stream": stream})
 		return nil, r.ctx.Err()
 	}
 
 	// XINFO STREAM
 	streamInfo, err := r.client.XInfoStream(r.ctx, stream).Result()
 	if err != nil {
-		r.logger.Warn("XInfoStream failed", map[string]interface{}{"stream": stream, "error": err.Error()})
+		r.logger.Warn(r.ctx, "XInfoStream failed", map[string]interface{}{"stream": stream, "error": err.Error()})
 		return nil, err
 	}
 
@@ -500,7 +500,7 @@ func (r *RedisTransport) collectStreamStats(stream string) (*StreamStats, error)
 	// XINFO GROUPS
 	groups, err := r.client.XInfoGroups(r.ctx, stream).Result()
 	if err != nil {
-		r.logger.Warn("XInfoGroups failed", map[string]interface{}{"stream": stream, "error": err.Error()})
+		r.logger.Warn(r.ctx, "XInfoGroups failed", map[string]interface{}{"stream": stream, "error": err.Error()})
 		return stats, nil // proceed with partial info
 	}
 
@@ -514,7 +514,7 @@ func (r *RedisTransport) collectStreamStats(stream string) (*StreamStats, error)
 		// XINFO CONSUMERS
 		consumers, err := r.client.XInfoConsumers(r.ctx, stream, grp.Name).Result()
 		if err != nil {
-			r.logger.Warn("XInfoConsumers failed", map[string]interface{}{
+			r.logger.Warn(r.ctx, "XInfoConsumers failed", map[string]interface{}{
 				"stream": stream,
 				"group":  grp.Name,
 				"error":  err.Error(),
@@ -541,7 +541,7 @@ func (r *RedisTransport) trimStream(stream string) {
 		return
 	}
 	if r.ctx.Err() != nil {
-		r.logger.Info("⏭️ Skipping XTRIM due to context cancellation", map[string]interface{}{
+		r.logger.Info(r.ctx, "⏭️ Skipping XTRIM due to context cancellation", map[string]interface{}{
 			"stream": stream,
 		})
 		return
@@ -564,21 +564,21 @@ func (r *RedisTransport) trimStream(stream string) {
 	case *redis.ClusterClient:
 		trimmed, err = cli.Do(r.ctx, args...).Int64()
 	default:
-		r.logger.Warn("❌ Unsupported Redis client type for stream trimming", map[string]interface{}{
+		r.logger.Warn(r.ctx, "❌ Unsupported Redis client type for stream trimming", map[string]interface{}{
 			"stream": stream,
 		})
 		return
 	}
 
 	if err != nil {
-		r.logger.Warn("🚫 Failed to trim stream", map[string]interface{}{
+		r.logger.Warn(r.ctx, "🚫 Failed to trim stream", map[string]interface{}{
 			"stream": stream,
 			"error":  err.Error(),
 		})
 		return
 	}
 
-	r.logger.Info("✅ Trimmed Redis stream", map[string]interface{}{
+	r.logger.Info(r.ctx, "✅ Trimmed Redis stream", map[string]interface{}{
 		"stream":          stream,
 		"entries_removed": trimmed,
 	})
@@ -592,7 +592,7 @@ func (r *RedisTransport) trimStream(stream string) {
 func (r *RedisTransport) cleanupStaleConsumers(stream, group string, idleThreshold time.Duration) {
 	// Check if context is cancelled
 	if r.ctx.Err() != nil {
-		r.logger.Info("Skipping cleanupStaleConsumers due to context cancellation", map[string]interface{}{"stream": stream, "group": group})
+		r.logger.Info(r.ctx, "Skipping cleanupStaleConsumers due to context cancellation", map[string]interface{}{"stream": stream, "group": group})
 		return
 	}
 	ctx := r.ctx
@@ -603,7 +603,7 @@ func (r *RedisTransport) cleanupStaleConsumers(stream, group string, idleThresho
 	}
 	consumers, err := r.client.XInfoConsumers(ctx, stream, group).Result()
 	if err != nil {
-		r.logger.Warn("❌ Failed to fetch consumers for cleanup", map[string]interface{}{
+		r.logger.Warn(ctx, "❌ Failed to fetch consumers for cleanup", map[string]interface{}{
 			"stream": stream,
 			"group":  group,
 			"error":  err.Error(),
@@ -613,7 +613,7 @@ func (r *RedisTransport) cleanupStaleConsumers(stream, group string, idleThresho
 
 	for _, c := range consumers {
 		if c.Idle > idleThreshold {
-			r.logger.Info("🧹 Removing stale consumer", map[string]interface{}{
+			r.logger.Info(ctx, "🧹 Removing stale consumer", map[string]interface{}{
 				"stream":   stream,
 				"group":    group,
 				"consumer": c.Name,
@@ -621,7 +621,7 @@ func (r *RedisTransport) cleanupStaleConsumers(stream, group string, idleThresho
 			})
 
 			if err := r.client.XGroupDelConsumer(ctx, stream, group, c.Name).Err(); err != nil {
-				r.logger.Warn("⚠️ Failed to remove stale consumer", map[string]interface{}{
+				r.logger.Warn(ctx, "⚠️ Failed to remove stale consumer", map[string]interface{}{
 					"stream":   stream,
 					"group":    group,
 					"consumer": c.Name,
@@ -639,7 +639,7 @@ func (r *RedisTransport) CleanupOnShutdown() {
 		meta := value.(StreamMeta)
 		// Check if context is cancelled
 		if r.ctx.Err() != nil {
-			r.logger.Info("Skipping CleanupOnShutdown due to context cancellation", map[string]interface{}{"stream": stream, "meta": meta})
+			r.logger.Info(r.ctx, "Skipping CleanupOnShutdown due to context cancellation", map[string]interface{}{"stream": stream, "meta": meta})
 			return false
 		}
 		ctx := r.ctx
@@ -650,16 +650,16 @@ func (r *RedisTransport) CleanupOnShutdown() {
 		}
 		if meta.ToDelete {
 			if err := r.client.Del(ctx, stream).Err(); err == nil {
-				r.logger.Info("🔪 Deleted stream", map[string]interface{}{"stream": stream})
+				r.logger.Info(ctx, "🔪 Deleted stream", map[string]interface{}{"stream": stream})
 			}
 		} else if meta.ToCleanGroup && meta.Group != "" {
 			if err := r.client.XGroupDestroy(ctx, stream, meta.Group).Err(); err == nil {
-				r.logger.Info("🧹 Deleted consumer group", map[string]interface{}{
+				r.logger.Info(ctx, "🧹 Deleted consumer group", map[string]interface{}{
 					"stream": stream,
 					"group":  meta.Group,
 				})
 			} else {
-				r.logger.Warn("Failed to delete consumer group", map[string]interface{}{
+				r.logger.Warn(ctx, "Failed to delete consumer group", map[string]interface{}{
 					"stream": stream,
 					"group":  meta.Group,
 					"error":  err.Error(),
@@ -695,7 +695,7 @@ func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consu
 		if errors.Is(err, redis.Nil) {
 			return nil, nil // ⬅️ No message, try again
 		}
-		r.logger.Error("💥 Error reading (XReadGroup) from stream", map[string]interface{}{"stream": stream, "error": err.Error()})
+		r.logger.Error(ctx, "💥 Error reading (XReadGroup) from stream", map[string]interface{}{"stream": stream, "error": err.Error()})
 		return nil, err
 	}
 
@@ -704,7 +704,7 @@ func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consu
 		for _, msg := range s.Messages {
 			bodyRaw, ok := msg.Values["body"]
 			if !ok {
-				r.logger.Error("⚠️ Missing 'body' field in message", map[string]interface{}{
+				r.logger.Error(ctx, "⚠️ Missing 'body' field in message", map[string]interface{}{
 					"stream": stream,
 					"id":     msg.ID,
 				})
@@ -714,7 +714,7 @@ func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consu
 
 			bodyStr, ok := bodyRaw.(string)
 			if !ok {
-				r.logger.Error("⚠️ 'body' field is not a string", map[string]interface{}{
+				r.logger.Error(ctx, "⚠️ 'body' field is not a string", map[string]interface{}{
 					"stream": stream,
 					"id":     msg.ID,
 				})
@@ -724,7 +724,7 @@ func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consu
 
 			processed, err := r.processData([]byte(bodyStr))
 			if err != nil {
-				r.logger.Error("❌ Error processing message data", map[string]interface{}{
+				r.logger.Error(ctx, "❌ Error processing message data", map[string]interface{}{
 					"stream": stream,
 					"id":     msg.ID,
 					"error":  err.Error(),
@@ -735,7 +735,7 @@ func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consu
 
 			decoded, err := api.DecodeTransportMessage(processed, msg.ID)
 			if err != nil {
-				r.logger.Error("❌ Failed to decode TransportMessage", map[string]interface{}{
+				r.logger.Error(ctx, "❌ Failed to decode TransportMessage", map[string]interface{}{
 					"stream": stream,
 					"id":     msg.ID,
 					"error":  err.Error(),
@@ -760,7 +760,7 @@ func (r *RedisTransport) Request(ctx context.Context, stream string, msg *api.Tr
 		return nil, fmt.Errorf("failed to verify stream(%s) existence: %w", stream, err)
 	}
 	if exists == 0 {
-		r.logger.Error("Requesting RPC stream that does not exists", map[string]interface{}{"stream": stream, "message": msg})
+		r.logger.Error(r.ctx, "Requesting RPC stream that does not exists", map[string]interface{}{"stream": stream, "message": msg})
 		return nil, fmt.Errorf("target RPC stream does not exist: %s", stream)
 	}
 	// Ensure ReplyTo is set
@@ -785,7 +785,7 @@ func (r *RedisTransport) Request(ctx context.Context, stream string, msg *api.Tr
 	//})
 
 	if err := r.Emit(ctx, stream, msg); err != nil {
-		r.logger.Error("Failed to send request after retries", map[string]interface{}{"error": err.Error()})
+		r.logger.Error(ctx, "Failed to send request after retries", map[string]interface{}{"error": err.Error()})
 		return nil, fmt.Errorf("failed to send request after retries: %w", err)
 
 	}
@@ -838,7 +838,7 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 	consumerName := r.serviceInstanceID
 	// Ensure consumer group exists (MKSTREAM allows stream autocreation)
 	if err := r.ensureConsumerGroup(groupName, replyStream, StreamMeta{ToDelete: true, ToTrim: true, ToCleanPending: true, ToCleanGroup: true}); err != nil {
-		r.logger.Error("Failed to create consumer group", map[string]interface{}{
+		r.logger.Error(ctx, "Failed to create consumer group", map[string]interface{}{
 			"stream": replyStream,
 			"group":  groupName,
 			"error":  err.Error(),
@@ -863,14 +863,14 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 			if r.ctx.Err() != nil {
 				return 0, nil
 			}
-			r.logger.Error("Error reading reply (XREADGROUP)", map[string]interface{}{"error": err.Error()})
+			r.logger.Error(ctx, "Error reading reply (XREADGROUP)", map[string]interface{}{"error": err.Error()})
 			return 0, err
 			//continue
 		}
 		for _, decoded := range messages {
 
 			if decoded.Deadline > 0 && time.Now().After(time.Unix(0, decoded.Deadline)) {
-				r.logger.Warn("RPC response past deadline, discarding", map[string]interface{}{
+				r.logger.Warn(ctx, "RPC response past deadline, discarding", map[string]interface{}{
 					"messageID": decoded.MessageID,
 					"replyTo":   replyStream,
 				})
@@ -888,7 +888,7 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 					typedCh <- decoded
 					// ✅ Acknowledge the message
 					if err := r.client.XAck(ctx, replyStream, groupName, decoded.TransportID).Err(); err != nil {
-						r.logger.Warn("Failed to acknowledge reply message", map[string]interface{}{
+						r.logger.Warn(ctx, "Failed to acknowledge reply message", map[string]interface{}{
 							"stream":     replyStream,
 							"group":      groupName,
 							"message_id": decoded.TransportID,
@@ -897,7 +897,7 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 					}
 				}
 			} else {
-				r.logger.Warn("🔍 Stray RPC response unknown MessageID", map[string]interface{}{
+				r.logger.Warn(ctx, "🔍 Stray RPC response unknown MessageID", map[string]interface{}{
 					"messageID": decoded.MessageID,
 					"replyTo":   replyStream,
 				})
@@ -915,7 +915,7 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 func (r *RedisTransport) cleanupExpiredPendingMessages(ctx context.Context, stream, group string) error {
 	pendingRes, err := r.client.XPending(ctx, stream, group).Result()
 	if err != nil {
-		r.logger.Warn("Failed XPENDING", map[string]interface{}{"stream": stream, "error": err.Error()})
+		r.logger.Warn(ctx, "Failed XPENDING", map[string]interface{}{"stream": stream, "error": err.Error()})
 		return nil
 	}
 	if pendingRes.Count == 0 {
@@ -930,7 +930,7 @@ func (r *RedisTransport) cleanupExpiredPendingMessages(ctx context.Context, stre
 		Count:  100,
 	}).Result()
 	if err != nil {
-		r.logger.Warn("Failed XPendingExt", map[string]interface{}{"stream": stream, "error": err.Error()})
+		r.logger.Warn(ctx, "Failed XPendingExt", map[string]interface{}{"stream": stream, "error": err.Error()})
 		return nil
 	}
 
@@ -953,7 +953,7 @@ func (r *RedisTransport) cleanupExpiredPendingMessages(ctx context.Context, stre
 			continue
 		}
 		if decoded.Deadline > 0 && time.Now().After(time.Unix(0, decoded.Deadline)) {
-			r.logger.Warn("Removing expired pending message", map[string]interface{}{
+			r.logger.Warn(ctx, "Removing expired pending message", map[string]interface{}{
 				"stream": stream,
 				"msgID":  msgID,
 			})
@@ -973,7 +973,7 @@ func (r *RedisTransport) Publish(ctx context.Context, stream string, data []byte
 	})
 	if r.isStreamOverflowing(stream) {
 
-		r.logger.Warn("stream is currently overflowing, throttling in place", map[string]interface{}{
+		r.logger.Warn(ctx, "stream is currently overflowing, throttling in place", map[string]interface{}{
 			"stream": stream,
 		})
 		time.Sleep(1000 * time.Millisecond)
@@ -987,14 +987,14 @@ func (r *RedisTransport) Publish(ctx context.Context, stream string, data []byte
 		return err
 	}
 	if err := Retry(ctx, r.maxRetries, r.retryDelay, addOp); err != nil {
-		r.logger.Error("Failed to publish message after retries", map[string]interface{}{"error": err.Error()})
+		r.logger.Error(ctx, "Failed to publish message after retries", map[string]interface{}{"error": err.Error()})
 		if dlqErr := PublishToDLQ(ctx, r.client, r.dlqStream, stream, data); dlqErr != nil {
-			r.logger.Error("Failed to publish to DLQ", map[string]interface{}{"error": dlqErr.Error()})
+			r.logger.Error(ctx, "Failed to publish to DLQ", map[string]interface{}{"error": dlqErr.Error()})
 		}
 		return fmt.Errorf("failed to publish message after retries: %w", err)
 	}
 
-	r.logger.Trace("Publishing message", map[string]interface{}{
+	r.logger.Debug(ctx, "Publishing message", map[string]interface{}{
 		"stream": stream,
 		"size":   len(data),
 	})
@@ -1006,7 +1006,7 @@ func (r *RedisTransport) Emit(ctx context.Context, stream string, msg *api.Trans
 	//start := time.Now()
 	jsonMsg, err := msg.ToJson()
 	if err != nil {
-		r.logger.Error("Emit: failed to encode message", map[string]interface{}{
+		r.logger.Error(ctx, "Emit: failed to encode message", map[string]interface{}{
 			"stream": stream,
 			"error":  err.Error(),
 			"msg":    msg,
@@ -1016,7 +1016,7 @@ func (r *RedisTransport) Emit(ctx context.Context, stream string, msg *api.Trans
 	}
 	encodedMsg, err := r.prepareData(jsonMsg)
 	if err != nil {
-		r.logger.Error("prepareData Message to Publish Error", map[string]interface{}{
+		r.logger.Error(ctx, "prepareData Message to Publish Error", map[string]interface{}{
 			"stream": stream,
 			"error":  err.Error(),
 			"msg":    jsonMsg,
@@ -1035,7 +1035,7 @@ func (r *RedisTransport) Subscribe(ctx context.Context, consumerGroup string, st
 	consumer := r.serviceInstanceID
 
 	if err := r.ensureConsumerGroup(group, stream, StreamMeta{ToDelete: false, ToTrim: true, ToCleanPending: true, ToCleanGroup: false}); err != nil {
-		r.logger.Error("Failed to create consumer group", map[string]interface{}{
+		r.logger.Error(ctx, "Failed to create consumer group", map[string]interface{}{
 			"stream": stream,
 			"group":  group,
 			"error":  err.Error(),
@@ -1043,11 +1043,11 @@ func (r *RedisTransport) Subscribe(ctx context.Context, consumerGroup string, st
 		return err
 	}
 
-	r.logger.Info("Subscribing to stream", map[string]interface{}{
+	r.logger.Info(ctx, "Subscribing to stream", map[string]interface{}{
 		"stream": stream,
 	})
 	if r.isSubscribedToStream(stream) {
-		r.logger.Warn("💥 Trying to read from an already subscribed to stream", map[string]interface{}{"stream": stream, "group": group, "consumer": consumer})
+		r.logger.Warn(ctx, "💥 Trying to read from an already subscribed to stream", map[string]interface{}{"stream": stream, "group": group, "consumer": consumer})
 		return fmt.Errorf("Trying to read from an already subscribed to stream %s", stream)
 	}
 
@@ -1066,9 +1066,9 @@ func (r *RedisTransport) Subscribe(ctx context.Context, consumerGroup string, st
 				return handlerErr
 			}
 			if err := Retry(ctx, r.maxRetries, r.retryDelay, addOp); err != nil {
-				r.logger.Error("Handler failed after retries; sending to DLQ", map[string]interface{}{"msgID": decoded.ID, "error": err.Error()})
+				r.logger.Error(ctx, "Handler failed after retries; sending to DLQ", map[string]interface{}{"msgID": decoded.ID, "error": err.Error()})
 				if dlqErr := PublishToDLQ(ctx, r.client, r.dlqStream, stream, decoded); dlqErr != nil {
-					r.logger.Error("Failed to publish to DLQ", map[string]interface{}{"error": dlqErr.Error()})
+					r.logger.Error(ctx, "Failed to publish to DLQ", map[string]interface{}{"error": dlqErr.Error()})
 				}
 				r.client.XAck(ctx, stream, group, decoded.ID)
 				return 0, fmt.Errorf("failed to handle received message after retries: %w", err)

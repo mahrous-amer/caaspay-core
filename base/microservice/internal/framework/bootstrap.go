@@ -30,15 +30,15 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 	// Step 4: Bind framework to service lifecycle
 	svcStruct, err := service.NewServiceStruct(fwCtx, svc)
 	if err != nil {
-		fwCtx.Logger().Error("❌ Service initialization failed", map[string]interface{}{"error": err.Error()})
+		fwCtx.Logger().Error(rootCtx, "❌ Service initialization failed", map[string]interface{}{"error": err.Error()})
 		os.Exit(1)
 	}
 
-	fwCtx.Logger().Info("✅ Service initialized", nil)
+	fwCtx.Logger().Info(rootCtx, "✅ Service initialized", nil)
 
 	// Step 5: Start the main service (not under supervisor)
 	//	fwCtx.Supervisor().Go(rootCtx, "service.run", func(ctx context.Context) error {
-	fwCtx.Logger().Info("🚀 Service is starting...", nil)
+	fwCtx.Logger().Info(rootCtx, "🚀 Service is starting...", nil)
 	svcStruct.Run()
 	//	return nil
 	//})
@@ -47,20 +47,20 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	fwCtx.Logger().Info("⏳ Waiting for any signal to shutdown...", nil)
+	fwCtx.Logger().Info(rootCtx, "⏳ Waiting for any signal to shutdown...", nil)
 
 	fwCtx.Supervisor().Go("signal.handler", func(ctx context.Context) error {
 		select {
 		case sig := <-sigChan:
-			fwCtx.Logger().Info("⚠️ Shutdown signal received", map[string]interface{}{"signal": sig.String()})
+			fwCtx.Logger().Info(ctx, "⚠️ Shutdown signal received", map[string]interface{}{"signal": sig.String()})
 		case <-ctx.Done():
-			fwCtx.Logger().Info("🛑 Signal handler context canceled", nil)
+			fwCtx.Logger().Info(ctx, "🛑 Signal handler context canceled", nil)
 			return nil
 		case err := <-fwCtx.Supervisor().ErrorChannel():
-			fwCtx.Logger().Error("💥 Shutting down due error in a supervised method", map[string]interface{}{"error": err.Error()})
+			fwCtx.Logger().Error(ctx, "💥 Shutting down due error in a supervised method", map[string]interface{}{"error": err.Error()})
 		}
 
-		fwCtx.Logger().Info("🛑 Initiating graceful shutdown...", nil)
+		fwCtx.Logger().Info(ctx, "🛑 Initiating graceful shutdown...", nil)
 		svcStruct.Shutdown()
 
 		return nil
@@ -68,9 +68,9 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 
 	// Step 7: Wait for shutdown and exit
 	fwCtx.Supervisor().WaitAndShutdown(func() {
-		fwCtx.Logger().Info("service shutdown phase done...", nil)
+		fwCtx.Logger().Info(rootCtx, "service shutdown phase done...", nil)
 		//	svcStruct.Shutdown()
 	})
 
-	fwCtx.Logger().Info("🏁 Bootstrap shutdown complete", nil)
+	fwCtx.Logger().Info(rootCtx, "🏁 Bootstrap shutdown complete", nil)
 }

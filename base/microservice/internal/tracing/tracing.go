@@ -30,7 +30,7 @@ type TracerManager struct {
 // NewTracerManager initializes OpenTelemetry tracing with proper logging and shutdown.
 func NewTracerManager(ctx context.Context, serviceName string, cfg *config.ObservabilityConfig, logger *logging.Logger) (*TracerManager, error) {
 	if !cfg.TracingEnabled {
-		logger.Warn("⚠️ Tracing is disabled in configuration", nil)
+		logger.Warn(ctx, "⚠️ Tracing is disabled in configuration", nil)
 		return &TracerManager{
 			ctx:      ctx,
 			tracer:   trace.NewNoopTracerProvider().Tracer(serviceName),
@@ -40,17 +40,25 @@ func NewTracerManager(ctx context.Context, serviceName string, cfg *config.Obser
 	}
 
 	var (
-		tp  *sdktrace.TracerProvider
-		err error
+		tp       *sdktrace.TracerProvider
+		err      error
+		endpoint string
 	)
 
 	switch cfg.MetricsAdapter {
 	case "jaeger":
-		tp, err = setupJaeger(serviceName, cfg, logger)
+		tp, endpoint, err = setupJaeger(serviceName, cfg)
+		logger.Info(ctx, "✅ Jaeger tracing initialized", map[string]interface{}{
+			"endpoint": endpoint,
+		})
 	case "datadog":
-		tp, err = setupDatadog(serviceName, cfg, logger)
+		tp, err = setupDatadog(serviceName, cfg)
+		logger.Info(ctx, "✅ Datadog tracing initialized", map[string]interface{}{
+			"env": cfg.Env,
+		})
+
 	default:
-		logger.Warn("⚠️ No valid tracing adapter provided. Tracing disabled", nil)
+		logger.Warn(ctx, "⚠️ No valid tracing adapter provided. Tracing disabled", nil)
 		return &TracerManager{
 			ctx:      ctx,
 			tracer:   trace.NewNoopTracerProvider().Tracer(serviceName),
@@ -60,7 +68,7 @@ func NewTracerManager(ctx context.Context, serviceName string, cfg *config.Obser
 	}
 
 	if err != nil {
-		logger.Error("❌ Failed to initialize tracing", map[string]interface{}{"error": err.Error()})
+		logger.Error(ctx, "❌ Failed to initialize tracing", map[string]interface{}{"error": err.Error()})
 		return &TracerManager{
 			ctx:      ctx,
 			tracer:   trace.NewNoopTracerProvider().Tracer(serviceName),
@@ -72,7 +80,7 @@ func NewTracerManager(ctx context.Context, serviceName string, cfg *config.Obser
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
-	logger.Info("✅ Tracing initialized successfully", map[string]interface{}{
+	logger.Info(ctx, "✅ Tracing initialized successfully", map[string]interface{}{
 		"adapter": cfg.MetricsAdapter,
 	})
 
@@ -84,7 +92,7 @@ func NewTracerManager(ctx context.Context, serviceName string, cfg *config.Obser
 			shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			if err := tp.Shutdown(shutdownCtx); err != nil {
-				logger.Error("⚠️ Failed to shutdown tracer provider", map[string]interface{}{
+				logger.Error(ctx, "⚠️ Failed to shutdown tracer provider", map[string]interface{}{
 					"error": err.Error(),
 				})
 			}
@@ -103,12 +111,12 @@ func (tm *TracerManager) Shutdown() {
 }
 
 // setupJaeger configures Jaeger exporter and tracer provider.
-func setupJaeger(serviceName string, cfg *config.ObservabilityConfig, logger *logging.Logger) (*sdktrace.TracerProvider, error) {
+func setupJaeger(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace.TracerProvider, string, error) {
 	endpoint := fmt.Sprintf("http://%s:%d/api/traces", cfg.OpentracingHost, cfg.OpentracingPort)
 
 	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(endpoint)))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	tp := sdktrace.NewTracerProvider(
@@ -119,15 +127,11 @@ func setupJaeger(serviceName string, cfg *config.ObservabilityConfig, logger *lo
 		)),
 	)
 
-	logger.Info("✅ Jaeger tracing initialized", map[string]interface{}{
-		"endpoint": endpoint,
-	})
-
-	return tp, nil
+	return tp, endpoint, nil
 }
 
 // setupDatadog configures Datadog tracer and returns a tracer provider.
-func setupDatadog(serviceName string, cfg *config.ObservabilityConfig, logger *logging.Logger) (*sdktrace.TracerProvider, error) {
+func setupDatadog(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace.TracerProvider, error) {
 	ddtracer.Start(
 		ddtracer.WithService(serviceName),
 		ddtracer.WithEnv(cfg.Env),
@@ -139,10 +143,6 @@ func setupDatadog(serviceName string, cfg *config.ObservabilityConfig, logger *l
 			semconv.ServiceNameKey.String(serviceName),
 		)),
 	)
-
-	logger.Info("✅ Datadog tracing initialized", map[string]interface{}{
-		"env": cfg.Env,
-	})
 
 	return tp, nil
 }

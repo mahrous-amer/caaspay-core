@@ -40,7 +40,7 @@ func NewServiceStruct(fwCtx api.FrameworkContextInterface, serviceInstance api.S
 func (s *ServiceStruct) Run() {
 	ctx := s.frameworkCtx.Context()
 
-	s.frameworkCtx.Logger().Info("Starting service", map[string]interface{}{
+	s.frameworkCtx.Logger().Info(ctx, "Starting service", map[string]interface{}{
 		"name": s.frameworkCtx.ServiceName(),
 	})
 
@@ -53,16 +53,16 @@ func (s *ServiceStruct) Run() {
 	}
 
 	if err := s.serviceInstance.Start(ctx); err != nil {
-		s.frameworkCtx.Logger().Error("❌ Service Start failed", map[string]interface{}{"error": err.Error()})
+		s.frameworkCtx.Logger().Error(ctx, "❌ Service Start failed", map[string]interface{}{"error": err.Error()})
 		return
 	}
 	if err := s.serviceInstance.HealthCheck(ctx); err != nil {
-		s.frameworkCtx.Logger().Error("❌ HealthCheck failed", map[string]interface{}{"error": err.Error()})
+		s.frameworkCtx.Logger().Error(ctx, "❌ HealthCheck failed", map[string]interface{}{"error": err.Error()})
 		return
 	}
 
 	s.lifecycle.MarkReady()
-	s.frameworkCtx.Logger().Info("✅ Service marked as ready", nil)
+	s.frameworkCtx.Logger().Info(ctx, "✅ Service marked as ready", nil)
 
 	// Block until shutdown requested via fwCtx.Context
 	//<-ctx.Done()
@@ -75,10 +75,10 @@ func (s *ServiceStruct) Shutdown() {
 	ctx := s.frameworkCtx.Context()
 	// call service stop first
 	if err := s.serviceInstance.Stop(ctx); err != nil {
-		s.frameworkCtx.Logger().Error("❌ Service Stop failed", map[string]interface{}{"error": err.Error()})
+		s.frameworkCtx.Logger().Error(ctx, "❌ Service Stop failed", map[string]interface{}{"error": err.Error()})
 	}
 
-	s.frameworkCtx.Logger().Info("Service shutting down", nil)
+	s.frameworkCtx.Logger().Info(ctx, "Service shutting down", nil)
 	if s.healthServer != nil {
 		s.healthServer.Stop()
 	}
@@ -107,7 +107,7 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 	svcValue := reflect.ValueOf(serviceInstance)
 	svcType := reflect.TypeOf(serviceInstance)
 
-	s.frameworkCtx.Logger().Info("🔌 AUTO Registering", map[string]interface{}{
+	s.frameworkCtx.Logger().Info(s.frameworkCtx.Context(), "🔌 AUTO Registering", map[string]interface{}{
 		"svcType": svcType.String(),
 	})
 
@@ -126,13 +126,13 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 				Service: s.frameworkCtx.ServiceName(),
 				Method:  trimPrefix(methodName, "RPC_"),
 			})
-			s.frameworkCtx.Logger().Info("🔌 Registering RPC", map[string]interface{}{
+			s.frameworkCtx.Logger().Info(s.frameworkCtx.Context(), "🔌 Registering RPC", map[string]interface{}{
 				"method": methodName, "stream": stream,
 			})
 			if err := s.registerRPCMethod(stream, methodValue, methodType); err != nil {
 				s.frameworkCtx.Metrics().IncrementTagged("service_errors", "stream", stream, "stage", "register_rpc")
 				file, line := callerInfo(3)
-				s.frameworkCtx.Logger().Fatal("Failed to register RPC method!", map[string]interface{}{
+				s.frameworkCtx.Logger().Fatal(s.frameworkCtx.Context(), "Failed to register RPC method!", map[string]interface{}{
 					"error":       err.Error(),
 					"stream":      stream,
 					"methodValue": methodValue.String(),
@@ -150,13 +150,13 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 				Service: s.frameworkCtx.ServiceName(),
 				Method:  trimPrefix(methodName, "EmitterPull_"),
 			})
-			s.frameworkCtx.Logger().Info("🔌 Registering EmitterPull", map[string]interface{}{
+			s.frameworkCtx.Logger().Info(s.frameworkCtx.Context(), "🔌 Registering EmitterPull", map[string]interface{}{
 				"method": methodName, "stream": stream,
 			})
 			if err := s.registerEmitterPull(stream, methodValue); err != nil {
 				s.frameworkCtx.Metrics().IncrementTagged("service_errors", "stream", stream, "stage", "register_emitterpull")
 				file, line := callerInfo(3)
-				s.frameworkCtx.Logger().Fatal("Failed to register EmitterPull method!", map[string]interface{}{
+				s.frameworkCtx.Logger().Fatal(s.frameworkCtx.Context(), "Failed to register EmitterPull method!", map[string]interface{}{
 					"error":       err.Error(),
 					"stream":      stream,
 					"methodValue": methodValue.String(),
@@ -174,13 +174,13 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 				Service: s.frameworkCtx.ServiceName(),
 				Method:  trimPrefix(methodName, "EmitterChannel_"),
 			})
-			s.frameworkCtx.Logger().Info("🔌 Registering EmitterChannel", map[string]interface{}{
+			s.frameworkCtx.Logger().Info(s.frameworkCtx.Context(), "🔌 Registering EmitterChannel", map[string]interface{}{
 				"method": methodName, "stream": stream,
 			})
 			if err := s.registerEmitterChannel(stream, methodValue); err != nil {
 				s.frameworkCtx.Metrics().IncrementTagged("service_errors", "stream", stream, "stage", "register_emitterchannel")
 				file, line := callerInfo(3)
-				s.frameworkCtx.Logger().Fatal("Failed to register EmitterChannel method!", map[string]interface{}{
+				s.frameworkCtx.Logger().Fatal(s.frameworkCtx.Context(), "Failed to register EmitterChannel method!", map[string]interface{}{
 					"error":       err.Error(),
 					"stream":      stream,
 					"methodValue": methodValue.String(),
@@ -197,14 +197,14 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 			parts := strings.SplitN(trimPrefix(methodName, "Receiver_"), "_", 2)
 
 			if len(parts) != 2 {
-				s.frameworkCtx.Logger().Error("❌ Invalid Receiver method name format. Expected: Receiver_Service_Method", map[string]interface{}{
+				s.frameworkCtx.Logger().Error(s.frameworkCtx.Context(), "❌ Invalid Receiver method name format. Expected: Receiver_Service_Method", map[string]interface{}{
 					"method": methodName,
 				})
 				continue
 			}
 
 			if methodType.NumIn() != 2 || methodType.NumOut() != 1 {
-				s.frameworkCtx.Logger().Error("❌ Receiver must have signature: func(context.Context, *Struct) error", map[string]interface{}{
+				s.frameworkCtx.Logger().Error(s.frameworkCtx.Context(), "❌ Receiver must have signature: func(context.Context, *Struct) error", map[string]interface{}{
 					"method": methodName,
 				})
 				continue
@@ -212,7 +212,7 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 
 			argType := methodType.In(1)
 			if argType.Kind() != reflect.Ptr || argType.Elem().Kind() != reflect.Struct {
-				s.frameworkCtx.Logger().Error("❌ Receiver 2nd argument must be pointer to a struct", map[string]interface{}{
+				s.frameworkCtx.Logger().Error(s.frameworkCtx.Context(), "❌ Receiver 2nd argument must be pointer to a struct", map[string]interface{}{
 					"method": methodName,
 				})
 				continue
@@ -220,7 +220,7 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 
 			errType := methodType.Out(0)
 			if errType != reflect.TypeOf((*error)(nil)).Elem() {
-				s.frameworkCtx.Logger().Error("❌ Receiver return type must be error", map[string]interface{}{
+				s.frameworkCtx.Logger().Error(s.frameworkCtx.Context(), "❌ Receiver return type must be error", map[string]interface{}{
 					"method": methodName,
 				})
 				continue
@@ -234,14 +234,14 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 				Method:  sourceMethod,
 			})
 
-			s.frameworkCtx.Logger().Info("🔌 Registering Receiver", map[string]interface{}{
+			s.frameworkCtx.Logger().Info(s.frameworkCtx.Context(), "🔌 Registering Receiver", map[string]interface{}{
 				"method": methodName, "stream": stream,
 			})
 
 			if err := s.registerReceiver(stream, argType, methodValue); err != nil {
 				s.frameworkCtx.Metrics().IncrementTagged("service_errors", "stream", stream, "stage", "register_receiver")
 				file, line := callerInfo(3)
-				s.frameworkCtx.Logger().Fatal("Failed to register Receiver method!", map[string]interface{}{
+				s.frameworkCtx.Logger().Fatal(s.frameworkCtx.Context(), "Failed to register Receiver method!", map[string]interface{}{
 					"error":       err.Error(),
 					"stream":      stream,
 					"methodValue": methodValue.String(),
@@ -267,7 +267,7 @@ func trimPrefix(s, prefix string) string {
 
 func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, methodType reflect.Type) error {
 	if methodType.NumIn() != 2 || methodType.NumOut() != 2 || methodType.In(0) != reflect.TypeOf((*context.Context)(nil)).Elem() {
-		s.frameworkCtx.Logger().Error("Invalid RPC method signature", map[string]interface{}{
+		s.frameworkCtx.Logger().Error(s.frameworkCtx.Context(), "Invalid RPC method signature", map[string]interface{}{
 			"method": method.String(),
 			"note":   "expected: func(context.Context, InputType) (OutputType, error)",
 		})
@@ -277,7 +277,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 	argType := methodType.In(1)
 	errType := methodType.Out(1)
 	if errType != reflect.TypeOf((*error)(nil)).Elem() {
-		s.frameworkCtx.Logger().Error("Invalid RPC return type", map[string]interface{}{
+		s.frameworkCtx.Logger().Error(s.frameworkCtx.Context(), "Invalid RPC return type", map[string]interface{}{
 			"method": method.String(),
 		})
 		return fmt.Errorf("Invalid RPC method return type %s", method.String())
@@ -304,7 +304,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 		start := time.Now()
 		argPtr := reflect.New(argType)
 		if err := json.Unmarshal(msg.Args, argPtr.Interface()); err != nil {
-			logger.Error("Failed to unmarshal args", map[string]interface{}{
+			logger.Error(ctx, "Failed to unmarshal args", map[string]interface{}{
 				"error":  err.Error(),
 				"stream": stream,
 			})
@@ -314,7 +314,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 
 		if validator := s.frameworkCtx.Validator(); validator != nil {
 			if err := validator.ValidateStruct(argPtr.Interface()); err != nil {
-				logger.Error("Validation failed", map[string]interface{}{
+				logger.Error(ctx, "Validation failed", map[string]interface{}{
 					"error":  err.Error(),
 					"stream": stream,
 				})
@@ -357,7 +357,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 
 			start = time.Now()
 			if err := s.frameworkCtx.Transport().Emit(ctx, msg.ReplyTo, reply); err != nil {
-				logger.Error("Failed to publish RPC reply", map[string]interface{}{
+				logger.Error(ctx, "Failed to publish RPC reply", map[string]interface{}{
 					"error":  err.Error(),
 					"stream": stream,
 				})
@@ -376,7 +376,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 		metrics.ObserveHistogram("framework.rpc.reply_create", timing.replyCreate.Seconds(), "stream", stream)
 		metrics.ObserveHistogram("framework.rpc.reply_publish", timing.replyPublish.Seconds(), "stream", stream)
 
-		logger.Info("⏱️ RPC Timings", map[string]interface{}{
+		logger.Info(ctx, "⏱️ RPC Timings", map[string]interface{}{
 			"stream":        stream,
 			"validate_ms":   timing.validate.Milliseconds(),
 			"execute_ms":    timing.execute.Milliseconds(),
@@ -391,7 +391,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 
 	//	s.frameworkCtx.Supervisor().Go("subscribe_"+stream, func(_ context.Context) error {
 	if err := s.frameworkCtx.Transport().Subscribe(s.frameworkCtx.Context(), "rpc_cg", stream, handler, true); err != nil {
-		s.frameworkCtx.Logger().Error("Failed to subscribe to RPC stream", map[string]interface{}{
+		s.frameworkCtx.Logger().Error(s.frameworkCtx.Context(), "Failed to subscribe to RPC stream", map[string]interface{}{
 			"stream": stream,
 			"error":  err.Error(),
 		})
@@ -412,7 +412,7 @@ func (s *ServiceStruct) registerEmitterPull(stream string, method reflect.Value)
 
 		select {
 		case <-safeCtx.Done():
-			s.frameworkCtx.Logger().Info("EmitterPull skipped due to cancellation", map[string]interface{}{
+			s.frameworkCtx.Logger().Info(s.frameworkCtx.Context(), "EmitterPull skipped due to cancellation", map[string]interface{}{
 				"stream": stream,
 			})
 			return 0, safeCtx.Err()
@@ -423,7 +423,7 @@ func (s *ServiceStruct) registerEmitterPull(stream string, method reflect.Value)
 		results := method.Call([]reflect.Value{reflect.ValueOf(safeCtx)})
 
 		if len(results) != 3 {
-			s.frameworkCtx.Logger().Error("EmitterPull returned unexpected result count", map[string]interface{}{
+			s.frameworkCtx.Logger().Error(safeCtx, "EmitterPull returned unexpected result count", map[string]interface{}{
 				"stream": stream,
 			})
 			s.frameworkCtx.Metrics().IncrementTagged("emitter_pull_errors", "stream", stream, "stage", "signature")
@@ -451,7 +451,7 @@ func (s *ServiceStruct) registerEmitterPull(stream string, method reflect.Value)
 			//}
 			select {
 			case <-safeCtx.Done():
-				s.frameworkCtx.Logger().Info("EmitterPull skipped due to cancellation", map[string]interface{}{
+				s.frameworkCtx.Logger().Info(s.frameworkCtx.Context(), "EmitterPull skipped due to cancellation", map[string]interface{}{
 					"stream": stream,
 				})
 				return 0, safeCtx.Err()
@@ -465,14 +465,14 @@ func (s *ServiceStruct) registerEmitterPull(stream string, method reflect.Value)
 			//	continue
 			//}
 			if err := s.frameworkCtx.Transport().Emit(safeCtx, stream, msg); err != nil {
-				s.frameworkCtx.Logger().Error("EmitterPull publish failed", map[string]interface{}{
+				s.frameworkCtx.Logger().Error(safeCtx, "EmitterPull publish failed", map[string]interface{}{
 					"stream": stream, "error": err.Error(),
 				})
 				s.frameworkCtx.Metrics().IncrementTagged("emitter_pull_errors", "stream", stream, "stage", "publish")
 				continue
 			}
 
-			s.frameworkCtx.Logger().Debug("EmitterPull emitted message", map[string]interface{}{
+			s.frameworkCtx.Logger().Debug(safeCtx, "EmitterPull emitted message", map[string]interface{}{
 				"stream": stream,
 			})
 			s.frameworkCtx.Compliance().TrackEvent("emitter_pull_emit")
@@ -523,14 +523,14 @@ func (s *ServiceStruct) registerEmitterChannel(stream string, method reflect.Val
 			//	return 100 * time.Millisecond, nil
 			//}
 			if err := s.frameworkCtx.Transport().Emit(ctx, stream, msg); err != nil {
-				s.frameworkCtx.Logger().Error("Channel emitter publish error", map[string]interface{}{
+				s.frameworkCtx.Logger().Error(ctx, "Channel emitter publish error", map[string]interface{}{
 					"stream": stream, "error": err.Error(),
 				})
 				s.frameworkCtx.Metrics().IncrementTagged("emitter_channel_errors", "stream", stream, "stage", "publish")
 				return 100 * time.Millisecond, nil
 			}
 
-			s.frameworkCtx.Logger().Debug("Channel emitted message", map[string]interface{}{
+			s.frameworkCtx.Logger().Debug(ctx, "Channel emitted message", map[string]interface{}{
 				"stream": stream,
 			})
 			s.frameworkCtx.Compliance().TrackEvent("emitter_channel_emit")
@@ -545,7 +545,7 @@ func (s *ServiceStruct) registerEmitterChannel(stream string, method reflect.Val
 
 func (s *ServiceStruct) registerReceiver(stream string, argType reflect.Type, method reflect.Value) error {
 	if argType.Kind() != reflect.Ptr || argType.Elem().Kind() != reflect.Struct {
-		s.frameworkCtx.Logger().Error("❌ Receiver argument must be pointer to a struct", map[string]interface{}{
+		s.frameworkCtx.Logger().Error(s.frameworkCtx.Context(), "❌ Receiver argument must be pointer to a struct", map[string]interface{}{
 			"stream": stream,
 		})
 		return fmt.Errorf("Receiver argument must be pointer to a struct")
@@ -565,7 +565,7 @@ func (s *ServiceStruct) registerReceiver(stream string, argType reflect.Type, me
 
 		argPtr := reflect.New(argType.Elem())
 		if err := json.Unmarshal(msg.Args, argPtr.Interface()); err != nil {
-			s.frameworkCtx.Logger().Error("Receiver: failed to unmarshal message body", map[string]interface{}{
+			s.frameworkCtx.Logger().Error(ctx, "Receiver: failed to unmarshal message body", map[string]interface{}{
 				"stream": stream, "error": err.Error(),
 			})
 			s.frameworkCtx.Metrics().IncrementTagged("receiver_errors", "stream", stream, "stage", "unmarshal_payload")
@@ -574,7 +574,7 @@ func (s *ServiceStruct) registerReceiver(stream string, argType reflect.Type, me
 
 		if validator := s.frameworkCtx.Validator(); validator != nil {
 			if err := validator.ValidateStruct(argPtr.Interface()); err != nil {
-				s.frameworkCtx.Logger().Error("Receiver: validation failed", map[string]interface{}{
+				s.frameworkCtx.Logger().Error(ctx, "Receiver: validation failed", map[string]interface{}{
 					"stream": stream, "error": err.Error(),
 				})
 				s.frameworkCtx.Metrics().IncrementTagged("receiver_errors", "stream", stream, "stage", "validation")
@@ -589,14 +589,14 @@ func (s *ServiceStruct) registerReceiver(stream string, argType reflect.Type, me
 		})
 		if errVal := results[0]; !errVal.IsNil() {
 			err := errVal.Interface().(error)
-			s.frameworkCtx.Logger().Error("Receiver handler returned error", map[string]interface{}{
+			s.frameworkCtx.Logger().Error(ctx, "Receiver handler returned error", map[string]interface{}{
 				"stream": stream, "error": err.Error(),
 			})
 			s.frameworkCtx.Metrics().IncrementTagged("receiver_errors", "stream", stream, "stage", "handler")
 			return nil, err
 		}
 
-		s.frameworkCtx.Logger().Debug("✅ Receiver handled message", map[string]interface{}{
+		s.frameworkCtx.Logger().Debug(ctx, "✅ Receiver handled message", map[string]interface{}{
 			"stream": stream,
 		})
 		s.frameworkCtx.Metrics().IncrementTagged("receiver_handled", "stream", stream)
@@ -607,7 +607,7 @@ func (s *ServiceStruct) registerReceiver(stream string, argType reflect.Type, me
 
 	//s.frameworkCtx.Supervisor().Go("receiver_CG_"+stream, func(ctx context.Context) error {
 	if err := s.frameworkCtx.Transport().Subscribe(s.frameworkCtx.Context(), "receiver_cg", stream, handler, false); err != nil {
-		s.frameworkCtx.Logger().Error("Receiver failed to subscribe", map[string]interface{}{
+		s.frameworkCtx.Logger().Error(s.frameworkCtx.Context(), "Receiver failed to subscribe", map[string]interface{}{
 			"stream": stream, "error": err.Error(),
 		})
 		//return err

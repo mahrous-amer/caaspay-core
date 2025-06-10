@@ -45,7 +45,7 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 
 	ctx, cancel := context.WithCancel(rootCtx)
 
-	logger := logging.NewLogger(ctx, cfg.Framework.ServiceName, cfg.Framework.Logging.Level, cfg.Framework.Logging.RedactSensitive)
+	logger := logging.NewLogger(cfg.Framework.ServiceName, cfg.Framework.Logging.Level, cfg.Framework.Logging.RedactSensitive)
 
 	metricsInstance, err := metrics.NewMetrics(ctx, cfg.Framework.ServiceName, &cfg.Framework.Observability, logger)
 	if err != nil {
@@ -126,9 +126,9 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 	if cfg.Framework.HealthCheck.HeartbeatEnabled {
 		fwCtx.supervisor.GoLoop("framework_heartbeat", func(ctx context.Context) (time.Duration, error) {
 			if fwCtx.IsHealthy() {
-				fwCtx.logger.Info("💓 Framework heartbeat... all systems healthy", nil)
+				fwCtx.logger.Info(ctx, "💓 Framework heartbeat... all systems healthy", nil)
 			} else {
-				fwCtx.logger.Error("💔 Framework heartbeat... one or more systems unhealthy", nil)
+				fwCtx.logger.Error(ctx, "💔 Framework heartbeat... one or more systems unhealthy", nil)
 			}
 			return cfg.Framework.HealthCheck.HeartbeatInterval, nil
 		})
@@ -175,13 +175,13 @@ func (f *FrameworkContext) IsHealthy() bool {
 	healthy := true
 
 	if !f.transport.IsHealthy() {
-		f.logger.Error("🚨 Transport not healthy", nil)
+		f.logger.Error(f.ctx, "🚨 Transport not healthy", nil)
 		healthy = false
 	}
 
 	if f.service != nil {
 		if err := f.service.HealthCheck(f.ctx); err != nil {
-			f.logger.Error("🚨 Service health check failed", map[string]interface{}{"error": err.Error()})
+			f.logger.Error(f.ctx, "🚨 Service health check failed", map[string]interface{}{"error": err.Error()})
 			healthy = false
 		}
 	}
@@ -256,7 +256,7 @@ func (f *FrameworkContext) RequestRPC(stream string, input any, output any, time
 	f.Metrics().ObserveHistogram("framework.rpc.transport", timing.transport.Seconds(), "stream", stream)
 	//f.Metrics().ObserveHistogram("framework.rpc.decode", timing.decode.Seconds(), "stream", stream)
 
-	f.Logger().Info("⏱️ RPC Request Timings", map[string]interface{}{
+	f.Logger().Info(f.ctx, "⏱️ RPC Request Timings", map[string]interface{}{
 		"stream":       stream,
 		"validate_ms":  timing.validate.Milliseconds(),
 		"encode_ms":    timing.encode.Milliseconds(),

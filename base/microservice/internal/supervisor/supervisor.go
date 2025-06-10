@@ -78,11 +78,11 @@ func (s *Supervisor) Go(name string, fn func(ctx context.Context) error) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				s.logger.Error("🔥 Panic in goroutine", map[string]interface{}{"name": finalName, "recover": r})
+				s.logger.Error(subCtx, "🔥 Panic in goroutine", map[string]interface{}{"name": finalName, "recover": r})
 			}
 			s.active.Delete(finalName)
 			close(done)
-			s.logger.Info("✅ Supervisor goroutine finished", map[string]interface{}{"name": finalName})
+			s.logger.Info(s.ctx, "✅ Supervisor goroutine finished", map[string]interface{}{"name": finalName})
 			s.wg.Done()
 		}()
 
@@ -92,11 +92,11 @@ func (s *Supervisor) Go(name string, fn func(ctx context.Context) error) {
 			case s.errChan <- err:
 			default:
 			}
-			s.logger.Error("💥 Goroutine crashed", map[string]interface{}{"name": finalName, "error": err.Error()})
+			s.logger.Error(subCtx, "💥 Goroutine crashed", map[string]interface{}{"name": finalName, "error": err.Error()})
 		}
 	}()
 
-	s.logger.Info("🚀 Supervisor started goroutine", map[string]interface{}{"name": finalName})
+	s.logger.Info(subCtx, "🚀 Supervisor started goroutine", map[string]interface{}{"name": finalName})
 }
 
 func (s *Supervisor) ErrorChannel() <-chan error {
@@ -111,18 +111,18 @@ func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) (time.Dura
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				s.logger.Error("🔥 Panic in loop", map[string]interface{}{"name": finalName, "recover": r})
+				s.logger.Error(subCtx, "🔥 Panic in loop", map[string]interface{}{"name": finalName, "recover": r})
 			}
 			s.active.Delete(finalName)
 			close(done)
-			s.logger.Info("✅ Supervisor loop finished", map[string]interface{}{"name": finalName})
+			s.logger.Info(s.ctx, "✅ Supervisor loop finished", map[string]interface{}{"name": finalName})
 			s.wg.Done()
 		}()
 
 		for {
 			select {
 			case <-subCtx.Done():
-				s.logger.Info("🛑 Loop exiting (ctx canceled)", map[string]interface{}{"name": finalName, "reason": subCtx.Err().Error()})
+				s.logger.Info(s.ctx, "🛑 Loop exiting (ctx canceled)", map[string]interface{}{"name": finalName, "reason": subCtx.Err().Error()})
 				return
 			default:
 			}
@@ -146,7 +146,7 @@ func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) (time.Dura
 			if sleep > 0 {
 				select {
 				case <-subCtx.Done():
-					s.logger.Info("🛑 Loop interrupted during sleep", map[string]interface{}{"name": finalName})
+					s.logger.Info(s.ctx, "🛑 Loop interrupted during sleep", map[string]interface{}{"name": finalName})
 					return
 				case <-time.After(sleep):
 				}
@@ -154,18 +154,18 @@ func (s *Supervisor) GoLoop(name string, fn func(ctx context.Context) (time.Dura
 		}
 	}()
 
-	s.logger.Info("🔁 Supervisor started loop", map[string]interface{}{"name": finalName})
+	s.logger.Info(subCtx, "🔁 Supervisor started loop", map[string]interface{}{"name": finalName})
 }
 
 func (s *Supervisor) WaitAndShutdown(onShutdown func()) {
 	select {
 	case <-s.ctx.Done():
-		s.logger.Info("🛑 Shutdown triggered by context cancellation", nil)
+		s.logger.Info(s.ctx, "🛑 Shutdown triggered by context cancellation", nil)
 		//case err := <-s.errChan:
 		//	s.logger.Error("💥 Shutdown due to error", map[string]interface{}{"error": err.Error()})
 	}
 
-	s.logger.Info("📋 Waiting for goroutines to finish...", nil)
+	s.logger.Info(s.ctx, "📋 Waiting for goroutines to finish...", nil)
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -175,12 +175,12 @@ func (s *Supervisor) WaitAndShutdown(onShutdown func()) {
 
 	select {
 	case <-done:
-		s.logger.Info("✅ All goroutines shut down cleanly", nil)
+		s.logger.Info(s.ctx, "✅ All goroutines shut down cleanly", nil)
 	case <-time.After(shutdownTimeout):
-		s.logger.Error("❌ Shutdown timed out. Dumping active goroutines:", nil)
+		s.logger.Error(s.ctx, "❌ Shutdown timed out. Dumping active goroutines:", nil)
 		s.active.Range(func(key, value any) bool {
 			info := value.(goroutineInfo)
-			s.logger.Warn("🧵 Possibly stuck", map[string]interface{}{
+			s.logger.Warn(s.ctx, "🧵 Possibly stuck", map[string]interface{}{
 				"name":        key,
 				"start_time":  info.StartTime.String(),
 				"caller_file": info.CallerFile,
@@ -232,15 +232,15 @@ func (s *Supervisor) IsHealthy() bool {
 		}
 
 		if uptime > time.Minute {
-			s.logger.Warn("⚠️ Long-running goroutine", entry)
+			s.logger.Warn(s.ctx, "⚠️ Long-running goroutine", entry)
 			// healthy = false // Enable if desired
 		} else {
-			s.logger.Info("🧵 Active goroutine", entry)
+			s.logger.Info(s.ctx, "🧵 Active goroutine", entry)
 		}
 		return true
 	})
 
-	s.logger.Info("📊 Supervisor active count", map[string]interface{}{
+	s.logger.Info(s.ctx, "📊 Supervisor active count", map[string]interface{}{
 		"count": activeCount,
 	})
 

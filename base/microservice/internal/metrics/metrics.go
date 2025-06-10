@@ -45,7 +45,7 @@ func NewMetrics(ctx context.Context, serviceName string, cfg *config.Observabili
 	}
 
 	if !cfg.TracingEnabled {
-		logger.Info("📉 Metrics disabled in configuration", nil)
+		logger.Info(ctx, "📉 Metrics disabled in configuration", nil)
 		return m, nil
 	}
 
@@ -60,13 +60,13 @@ func NewMetrics(ctx context.Context, serviceName string, cfg *config.Observabili
 			tracer.WithService(cfg.MetricsHost),
 			tracer.WithEnv("development"),
 		)
-		logger.Info("📡 DataDog metrics enabled", map[string]interface{}{
+		logger.Info(ctx, "📡 DataDog metrics enabled", map[string]interface{}{
 			"adapter": "statsd",
 		})
 	}
 
 	m.meter = otel.Meter(serviceName)
-	logger.Info("✅ Metrics successfully initialized", map[string]interface{}{
+	logger.Info(ctx, "✅ Metrics successfully initialized", map[string]interface{}{
 		"adapter": cfg.MetricsAdapter,
 	})
 
@@ -93,7 +93,7 @@ func (m *Metrics) getOrCreateCounter(name string) metric.Int64Counter {
 	}
 	counter, err := m.meter.Int64Counter(name)
 	if err != nil {
-		m.logger.Warn("Failed to register counter", map[string]interface{}{"name": name, "error": err.Error()})
+		m.logger.Warn(m.ctx, "Failed to register counter", map[string]interface{}{"name": name, "error": err.Error()})
 		return nil
 	}
 	m.counters[name] = counter
@@ -110,7 +110,7 @@ func (m *Metrics) getOrCreateHistogram(name string) metric.Float64Histogram {
 	}
 	hist, err := m.meter.Float64Histogram(name)
 	if err != nil {
-		m.logger.Warn("Failed to register histogram", map[string]interface{}{"name": name, "error": err.Error()})
+		m.logger.Warn(m.ctx, "Failed to register histogram", map[string]interface{}{"name": name, "error": err.Error()})
 		return nil
 	}
 	m.histograms[name] = hist
@@ -127,7 +127,7 @@ func (m *Metrics) getOrCreateGauge(name string) metric.Int64UpDownCounter {
 	}
 	gauge, err := m.meter.Int64UpDownCounter(name)
 	if err != nil {
-		m.logger.Warn("Failed to register gauge", map[string]interface{}{"name": name, "error": err.Error()})
+		m.logger.Warn(m.ctx, "Failed to register gauge", map[string]interface{}{"name": name, "error": err.Error()})
 		return nil
 	}
 	m.activeGauges[name] = gauge
@@ -156,7 +156,7 @@ func (m *Metrics) IncrementTagged(name string, tags ...string) {
 	}
 	counter := m.getOrCreateCounter(name)
 	if counter == nil {
-		m.logger.Warn("⚠️ Unknown metric for IncrementTagged", map[string]interface{}{"metric": name})
+		m.logger.Warn(m.ctx, "⚠️ Unknown metric for IncrementTagged", map[string]interface{}{"metric": name})
 		return
 	}
 	attrs := make([]attribute.KeyValue, 0, len(tags)/2)
@@ -173,7 +173,7 @@ func (m *Metrics) ObserveHistogram(name string, value float64, tags ...string) {
 	}
 	hist := m.getOrCreateHistogram(name)
 	if hist == nil {
-		m.logger.Warn("⚠️ Unknown metric for ObserveHistogram", map[string]interface{}{"metric": name})
+		m.logger.Warn(m.ctx, "⚠️ Unknown metric for ObserveHistogram", map[string]interface{}{"metric": name})
 		return
 	}
 	attrs := make([]attribute.KeyValue, 0, len(tags)/2)

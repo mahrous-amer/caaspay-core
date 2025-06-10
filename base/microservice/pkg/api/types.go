@@ -62,3 +62,21 @@ func (s *StreamConfig) Validate() error {
 
 	return nil
 }
+
+// ContextKey defines typed context keys used throughout the framework
+type ContextKey string
+
+const (
+	// Logging and Tracing
+	CtxKeyMessageID ContextKey = "msg_id"
+	CtxKeyStream    ContextKey = "stream"
+	CtxKeyRStream   ContextKey = "reply_stream"
+	CtxKeyTraceID   ContextKey = "trace_id"
+	CtxKeySpanID    ContextKey = "span_id"
+
+	// Auth / Requester Metadata
+	CtxKeyUserID ContextKey = "user_id"
+	CtxKeyLocale ContextKey = "locale"
+	CtxKeyIP     ContextKey = "ip"
+	CtxKeySource ContextKey = "source"
+)

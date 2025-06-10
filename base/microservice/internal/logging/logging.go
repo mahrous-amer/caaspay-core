@@ -2,141 +2,74 @@ package logging
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	"log/slog"
 	"os"
-	"sync"
-	"time"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"strings"
 )
 
-// Logger provides structured logging with redaction and context.
 type Logger struct {
-	serviceName string
-	logLevel    string
+	slog        *slog.Logger
+	logLevel    slog.Level
 	redact      bool
-	mu          sync.Mutex
-	tracer      trace.Tracer
-	ctx         context.Context
+	serviceName string
 }
 
-// NewLogger initializes a logger instance with framework configuration and context.
-func NewLogger(ctx context.Context, serviceName string, logLevel string, redact bool) *Logger {
-	return &Logger{
-		ctx:         ctx,
+// NewLogger initializes the structured logger.
+func NewLogger(serviceName string, level string, redact bool) *Logger {
+	levelMap := map[string]slog.Level{
+		"DEBUG": slog.LevelDebug,
+		"INFO":  slog.LevelInfo,
+		"WARN":  slog.LevelWarn,
+		"ERROR": slog.LevelError,
+	}
+
+	logLevel, ok := levelMap[strings.ToUpper(level)]
+	if !ok {
+		logLevel = slog.LevelInfo
+	}
+
+	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: logLevel,
+	})
+	enhanced := &contextAwareHandler{
+		next:        handler,
 		serviceName: serviceName,
+	}
+
+	return &Logger{
+		slog:        slog.New(enhanced),
 		logLevel:    logLevel,
 		redact:      redact,
-		tracer:      otel.Tracer(serviceName),
+		serviceName: serviceName,
 	}
 }
 
-// Log levels for structured logging
-const (
-	LevelTrace = "TRACE"
-	LevelDebug = "DEBUG"
-	LevelInfo  = "INFO"
-	LevelWarn  = "WARN"
-	LevelError = "ERROR"
-	LevelFatal = "FATAL"
-)
-
-// Log logs messages with structured key-value pairs and OpenTelemetry tracing.
-func (l *Logger) Log(level, message string, fields map[string]interface{}) {
-	if !l.shouldLog(level) {
-		return
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	//	spanCtx := trace.SpanContextFromContext(l.ctx)
-	//	traceID := spanCtx.TraceID().String()
-	//	spanID := spanCtx.SpanID().String()
-
-	if l.redact {
-		fields = redactSensitiveData(fields)
-	}
-
-	logEntry := map[string]interface{}{
-		"time":    time.Now().Format(time.RFC3339),
-		"level":   level,
-		"service": l.serviceName,
-		"message": message,
-		//		"trace_id": traceID,
-		//		"span_id":  spanID,
-		"fields": fields,
-	}
-
-	logJSON, _ := json.Marshal(logEntry)
-	fmt.Println(string(logJSON))
-
-	if span := trace.SpanFromContext(l.ctx); span.IsRecording() {
-		for key, value := range fields {
-			span.SetAttributes(attribute.String(key, fmt.Sprintf("%v", value)))
-		}
-	}
+func (l *Logger) Debug(ctx context.Context, msg string, fields map[string]interface{}) {
+	l.slog.DebugContext(ctx, msg, mapToArgs(l.redact, fields)...)
 }
 
-// Info logs informational messages.
-func (l *Logger) Info(message string, fields map[string]interface{}) {
-	l.Log(LevelInfo, message, fields)
+func (l *Logger) Info(ctx context.Context, msg string, fields map[string]interface{}) {
+	l.slog.InfoContext(ctx, msg, mapToArgs(l.redact, fields)...)
 }
 
-// Debug logs debug messages.
-func (l *Logger) Debug(message string, fields map[string]interface{}) {
-	if l.logLevel == LevelDebug {
-		l.Log(LevelDebug, message, fields)
-	}
+func (l *Logger) Warn(ctx context.Context, msg string, fields map[string]interface{}) {
+	l.slog.WarnContext(ctx, msg, mapToArgs(l.redact, fields)...)
 }
 
-// Trace logs debug messages.
-func (l *Logger) Trace(message string, fields map[string]interface{}) {
-	if l.logLevel == LevelTrace {
-		l.Log(LevelTrace, message, fields)
-	}
+func (l *Logger) Error(ctx context.Context, msg string, fields map[string]interface{}) {
+	l.slog.ErrorContext(ctx, msg, mapToArgs(l.redact, fields)...)
 }
 
-// Warn logs warning messages.
-func (l *Logger) Warn(message string, fields map[string]interface{}) {
-	l.Log(LevelWarn, message, fields)
-}
-
-// Error logs error messages.
-func (l *Logger) Error(message string, fields map[string]interface{}) {
-	l.Log(LevelError, message, fields)
-}
-
-// Fatal logs fatal errors and exits.
-func (l *Logger) Fatal(message string, fields map[string]interface{}) {
-	l.Log(LevelFatal, message, fields)
+func (l *Logger) Fatal(ctx context.Context, msg string, fields map[string]interface{}) {
+	l.slog.ErrorContext(ctx, msg, mapToArgs(l.redact, fields)...)
 	os.Exit(1)
 }
 
-// shouldLog checks if the current log level allows logging the given level.
-func (l *Logger) shouldLog(level string) bool {
-	allowedLevels := map[string]int{
-		LevelTrace: 1,
-		LevelDebug: 2,
-		LevelInfo:  3,
-		LevelWarn:  4,
-		LevelError: 5,
-		LevelFatal: 6,
-	}
-
-	currentLevel := allowedLevels[l.logLevel]
-	targetLevel := allowedLevels[level]
-
-	return targetLevel >= currentLevel
-}
-
 func isSensitiveKey(key string) bool {
-	sensitiveKeywords := []string{"password", "secret", "token", "apikey"}
-	for _, keyword := range sensitiveKeywords {
-		if key == keyword {
+	sensitive := []string{"password", "secret", "token", "apikey"}
+	key = strings.ToLower(key)
+	for _, s := range sensitive {
+		if strings.Contains(key, s) {
 			return true
 		}
 	}
@@ -144,13 +77,27 @@ func isSensitiveKey(key string) bool {
 }
 
 func redactSensitiveData(data map[string]interface{}) map[string]interface{} {
-	redacted := make(map[string]interface{})
-	for key, value := range data {
-		if isSensitiveKey(key) {
-			redacted[key] = "[REDACTED]"
+	redacted := make(map[string]interface{}, len(data))
+	for k, v := range data {
+		if isSensitiveKey(k) {
+			redacted[k] = "[REDACTED]"
 		} else {
-			redacted[key] = value
+			redacted[k] = v
 		}
 	}
 	return redacted
+}
+
+func mapToArgs(redact bool, fields map[string]interface{}) []any {
+	if fields == nil {
+		return nil
+	}
+	if redact {
+		fields = redactSensitiveData(fields)
+	}
+	args := make([]any, 0, len(fields)*2)
+	for k, v := range fields {
+		args = append(args, k, v)
+	}
+	return args
 }
