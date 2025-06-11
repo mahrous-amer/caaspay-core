@@ -286,7 +286,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.transport.min_idle_conns", 2)
 	v.SetDefault("framework.transport.stream_read_count", 10)
 	v.SetDefault("framework.transport.dial_timeout", 5*time.Second)
-	v.SetDefault("framework.transport.read_timeout", 10*time.Second)
+	v.SetDefault("framework.transport.read_timeout", 20*time.Second)
 	v.SetDefault("framework.transport.retry_delay", 1*time.Second)
 	v.SetDefault("framework.transport.write_timeout", 2*time.Second)
 	v.SetDefault("framework.transport.pool_timeout", 1*time.Second)

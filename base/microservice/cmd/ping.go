@@ -186,7 +186,7 @@ func (s *pingService) EmitterChannel_PushLog(ctx context.Context, ch chan *api.T
 //}
 
 func (s *pingService) Receiver_example__service_Heartbeat(ctx context.Context, msg *HeartbeatMessage) error {
-	//s.ctx.Logger().Info("✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅ Heartbeat received", map[string]interface{}{
+	//s.ctx.Logger().Info(ctx, "✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅ Heartbeat received", map[string]interface{}{
 	//	"node":   msg.Node,
 	//	"status": msg.Status,
 	//	"uptime": msg.Uptime,

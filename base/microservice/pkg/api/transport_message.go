@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,4 +123,38 @@ func (m *TransportMessage) ValidateAgainst(schema any) error {
 	}
 
 	return nil
+}
+
+func (m *TransportMessage) AttachToContext(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, CtxKeyMessageID, m.TransportID)
+	ctx = context.WithValue(ctx, CtxKeyStream, m.Method)
+	ctx = context.WithValue(ctx, CtxKeyRStream, m.ReplyTo)
+
+	// Auth metadata
+	if m.Auth != nil && m.Auth.UserID != "" {
+		ctx = context.WithValue(ctx, CtxKeyUserID, m.Auth.UserID)
+	}
+
+	// Request metadata
+	if m.Context != nil {
+		if m.Context.IP != "" {
+			ctx = context.WithValue(ctx, CtxKeyIP, m.Context.IP)
+		}
+		if m.Context.Locale != "" {
+			ctx = context.WithValue(ctx, CtxKeyLocale, m.Context.Locale)
+		}
+		if m.Context.Source != "" {
+			ctx = context.WithValue(ctx, CtxKeySource, m.Context.Source)
+		}
+	}
+
+	// Optional: add trace/span ID if you extract from m.Trace map
+	if traceID, ok := m.Trace["trace_id"]; ok {
+		ctx = context.WithValue(ctx, CtxKeyTraceID, traceID)
+	}
+	if spanID, ok := m.Trace["span_id"]; ok {
+		ctx = context.WithValue(ctx, CtxKeySpanID, spanID)
+	}
+
+	return ctx
 }

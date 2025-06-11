@@ -772,6 +772,8 @@ func (r *RedisTransport) Request(ctx context.Context, stream string, msg *api.Tr
 		}
 	}
 
+	ctx = msg.AttachToContext(ctx)
+
 	// Prepare response channel
 	responseCh := make(chan *api.TransportMessage, 1)
 	r.replyRouter.Store(msg.MessageID, responseCh)
@@ -825,6 +827,7 @@ func (r *RedisTransport) Request(ctx context.Context, stream string, msg *api.Tr
 	// Wait for reply
 	select {
 	case response := <-responseCh:
+		ctx = response.AttachToContext(ctx)
 		return response, nil
 	case <-time.After(timeout):
 		r.replyRouter.Delete(msg.MessageID)
@@ -1004,6 +1007,7 @@ func (r *RedisTransport) Publish(ctx context.Context, stream string, data []byte
 
 func (r *RedisTransport) Emit(ctx context.Context, stream string, msg *api.TransportMessage) error {
 	//start := time.Now()
+	ctx = msg.AttachToContext(ctx)
 	jsonMsg, err := msg.ToJson()
 	if err != nil {
 		r.logger.Error(ctx, "Emit: failed to encode message", map[string]interface{}{
@@ -1061,6 +1065,7 @@ func (r *RedisTransport) Subscribe(ctx context.Context, consumerGroup string, st
 
 		for _, decoded := range messages {
 
+			ctx = decoded.AttachToContext(ctx)
 			addOp := func() error {
 				_, handlerErr := handler(ctx, decoded)
 				return handlerErr

@@ -68,7 +68,7 @@ type ContextKey string
 
 const (
 	// Logging and Tracing
-	CtxKeyMessageID ContextKey = "msg_id"
+	CtxKeyMessageID ContextKey = "msg_transport_id"
 	CtxKeyStream    ContextKey = "stream"
 	CtxKeyRStream   ContextKey = "reply_stream"
 	CtxKeyTraceID   ContextKey = "trace_id"
