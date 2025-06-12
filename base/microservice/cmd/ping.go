@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	//	"io"
 	//"math/rand"
 	"errors"
 	"strconv"
@@ -41,6 +42,16 @@ type PushlogMessage struct {
 	Ts     string `json:"ts"`
 	Uptime string `json:"uptime"`
 	Note   string `json:"note"`
+}
+
+type MyRequest struct {
+	Name string `json:"name"`
+	Age  int    `json:"age"`
+}
+
+type MyResponse struct {
+	Status string `json:"status"`
+	ID     string `json:"id"`
 }
 
 type pingService struct {
@@ -114,6 +125,31 @@ func (s *pingService) HealthCheck(ctx context.Context) error {
 	s.pushlogChan <- msg2
 	//	return sleepDuration, nil
 	//})
+
+	httpreq := MyRequest{
+		Name: "John",
+		Age:  30,
+	}
+
+	var httpresp MyResponse
+
+	err := s.ctx.RequestHTTP(ctx, "POST", "https://api.caaspay.com/webhook", httpreq, map[string]string{
+		"Authorization": "Bearer my-token",
+	}, &httpresp)
+
+	if err != nil {
+		s.ctx.Logger().Error(ctx, "❌ RequestHTTP failed", map[string]interface{}{"error": err.Error()})
+	} else {
+		s.ctx.Logger().Info(ctx, "✅ RequestHTTP OK", map[string]interface{}{"response": httpresp})
+	}
+
+	hh := map[string]string{
+		"type": "test_RAW",
+	}
+	bo, _ := json.Marshal(hh)
+	rrr, r2, _ := s.ctx.RequestHTTPRaw(ctx, "POST", "https://api.caaspay.com/webhook", bo, nil)
+	s.ctx.Logger().Info(ctx, "✅✅✅✅✅✅ RequestHTTP OK", map[string]interface{}{"response": rrr, "body": r2})
+
 	return nil
 }
 

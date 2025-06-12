@@ -30,6 +30,7 @@ type FrameworkConfig struct {
 	Version             string              `mapstructure:"version"`
 	RPC                 RPCConfig           `mapstructure:"rpc"`
 	Transport           TransportConfig     `mapstructure:"transport"`
+	HTTPClient          HTTPClientConfig    `mapstructure:"httpclient"`
 	Logging             LoggingConfig       `mapstructure:"logging"`
 	HealthCheck         HealthConfig        `mapstructure:"health_check"`
 	Observability       ObservabilityConfig `mapstructure:"observability"`
@@ -79,6 +80,11 @@ type TransportConfig struct {
 	StreamTrimMaxLen int64         `mapstructure:"stream_trim_max_len"` // hard cap on stream length (e.g., 10000 entries)
 	StreamTrimApprox bool          `mapstructure:"stream_trim_approx"`  // use ~ approximation (faster trim)
 	PeriodicTrimFreq time.Duration `mapstructure:"periodic_trim_freq"`  // Frequency of periodic trimming
+}
+
+type HTTPClientConfig struct {
+	Timeout   time.Duration `mapstructure:"timeout"`
+	UserAgent string        `mapstructure:"user_agent"`
 }
 
 // LoggingConfig contains logging-related settings.
@@ -301,6 +307,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("framework.transport.move_expired_to_dlq", true)
 	v.SetDefault("framework.transport.stream_trim_max_len", 10000)
 	v.SetDefault("framework.transport.stream_trim_approx", true)
+	v.SetDefault("framework.httpclient.timeout", 60*time.Second)
+	v.SetDefault("framework.httpclient.user_agent", "CAASPay/1.0 (service; +https://caaspay.com; contact=requestsinfo@caaspay.com)")
 	v.SetDefault("framework.logging.level", "info")
 	v.SetDefault("framework.logging.format", "json")
 	v.SetDefault("framework.logging.redact_sensitive", true)

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/config"
@@ -94,6 +95,22 @@ type FrameworkContextInterface interface {
 	BuildStreamName(kind StreamType, service, method string) string
 	BuildRPCStreamName(method string, serviceName ...string) string
 	RequestRPC(stream string, input any, output any, timeout time.Duration) error
+	//RequestHTTP(ctx context.Context, method, url string, body []byte, headers map[string]string) (*http.Response, error)
+	RequestHTTP(
+		ctx context.Context,
+		method string,
+		url string,
+		input any,
+		headers map[string]string,
+		output any,
+	) error
+	RequestHTTPRaw(
+		ctx context.Context,
+		method string,
+		url string,
+		body []byte,
+		headers map[string]string,
+	) (*http.Response, []byte, error)
 }
 
 // TransportInterface defines the messaging transport interface for pluggable broker backends.
@@ -106,4 +123,23 @@ type TransportInterface interface {
 	IsHealthy() bool
 	CleanupOnShutdown()
 	CleanupOnStartup()
+}
+
+type HTTPClientInterface interface {
+	//Request(ctx context.Context, method, url string, body []byte, headers map[string]string) (*http.Response, error)
+	RequestHTTP(
+		ctx context.Context,
+		method string,
+		url string,
+		input any,
+		headers map[string]string,
+		output any,
+	) error
+	RequestHTTPRaw(
+		ctx context.Context,
+		method string,
+		url string,
+		body []byte,
+		headers map[string]string,
+	) (*http.Response, []byte, error)
 }

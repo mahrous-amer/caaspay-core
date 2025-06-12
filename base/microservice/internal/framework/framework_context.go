@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"runtime"
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/compliance"
 	"github.com/caaspay/caaspay-core/internal/config"
+	"github.com/caaspay/caaspay-core/internal/httpclient"
 	"github.com/caaspay/caaspay-core/internal/logging"
 	"github.com/caaspay/caaspay-core/internal/metrics"
 	"github.com/caaspay/caaspay-core/internal/storage"
@@ -34,6 +36,7 @@ type FrameworkContext struct {
 	validator     api.ValidatorInterface
 	service       api.ServiceInterface
 	supervisor    api.SupervisorInterface
+	httpClient    api.HTTPClientInterface
 }
 
 // NewFrameworkContext initializes all framework components and returns a unified context.
@@ -108,6 +111,16 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 		serviceConfig = config.DefaultServiceConfig()
 	}
 
+	httpClientCfg := httpclient.Config{
+		Timeout:    cfg.Framework.HTTPClient.Timeout,
+		UserAgent:  cfg.Framework.HTTPClient.UserAgent,
+		Logger:     logger,
+		Metrics:    metricsInstance,
+		Supervisor: supervisorInstance,
+		Compliance: complianceReporter,
+	}
+	httpClient := httpclient.NewClient(httpClientCfg)
+
 	fwCtx := &FrameworkContext{
 		ctx:           ctx,
 		cancel:        cancel,
@@ -121,6 +134,7 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 		serviceName:   cfg.Framework.ServiceName,
 		validator:     validator,
 		supervisor:    supervisorInstance,
+		httpClient:    httpClient,
 	}
 
 	if cfg.Framework.HealthCheck.HeartbeatEnabled {
@@ -266,4 +280,29 @@ func (f *FrameworkContext) RequestRPC(stream string, input any, output any, time
 	})
 
 	return nil
+}
+
+//func (f *FrameworkContext) RequestHTTP(ctx context.Context, method, url string, body []byte, headers map[string]string) (*http.Response, error) {
+//	return f.httpClient.Request(ctx, method, url, body, headers)
+//}
+
+func (f *FrameworkContext) RequestHTTPRaw(
+	ctx context.Context,
+	method string,
+	url string,
+	body []byte,
+	headers map[string]string,
+) (*http.Response, []byte, error) {
+	return f.httpClient.RequestHTTPRaw(ctx, method, url, body, headers)
+}
+
+func (f *FrameworkContext) RequestHTTP(
+	ctx context.Context,
+	method string,
+	url string,
+	input any,
+	headers map[string]string,
+	output any,
+) error {
+	return f.httpClient.RequestHTTP(ctx, method, url, input, headers, output)
 }

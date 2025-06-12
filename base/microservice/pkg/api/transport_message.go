@@ -73,6 +73,16 @@ func NewTransportMessage(service, method string, rawArgs json.RawMessage, timeou
 	}
 }
 
+func NewHTTPMessage(method, url string, body []byte, headers map[string]string, timeout time.Duration) *TransportMessage {
+	msg := NewTransportMessage("external_http", fmt.Sprintf("%s:%s", method, url), body, timeout)
+	msg.Stash = map[string]any{
+		"http_url":     url,
+		"http_method":  method,
+		"http_headers": headers,
+	}
+	return msg
+}
+
 // Validate checks if the required fields are present.
 func (m *TransportMessage) Validate() error {
 	if m.MessageID == "" || m.TransportID == "" {
