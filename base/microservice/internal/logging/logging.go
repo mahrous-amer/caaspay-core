@@ -12,6 +12,7 @@ type Logger struct {
 	logLevel    slog.Level
 	redact      bool
 	serviceName string
+	fatalSignal chan struct{}
 }
 
 // NewLogger initializes the structured logger.
@@ -41,7 +42,12 @@ func NewLogger(serviceName string, level string, redact bool) *Logger {
 		logLevel:    logLevel,
 		redact:      redact,
 		serviceName: serviceName,
+		fatalSignal: make(chan struct{}, 1),
 	}
+}
+
+func (l *Logger) FatalSignal() <-chan struct{} {
+	return l.fatalSignal
 }
 
 func (l *Logger) Debug(ctx context.Context, msg string, fields map[string]interface{}) {
@@ -61,8 +67,14 @@ func (l *Logger) Error(ctx context.Context, msg string, fields map[string]interf
 }
 
 func (l *Logger) Fatal(ctx context.Context, msg string, fields map[string]interface{}) {
-	l.slog.ErrorContext(ctx, msg, mapToArgs(l.redact, fields)...)
-	os.Exit(1)
+	l.slog.ErrorContext(ctx, "🛑 FATAL: triggering graceful shutdown", mapToArgs(l.redact, fields)...)
+
+	// non-blocking signal
+	select {
+	case l.fatalSignal <- struct{}{}:
+	default:
+		// already signaled
+	}
 }
 
 func isSensitiveKey(key string) bool {

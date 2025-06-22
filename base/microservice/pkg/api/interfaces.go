@@ -22,6 +22,7 @@ type LoggerInterface interface {
 	Warn(ctx context.Context, message string, fields map[string]interface{})
 	Debug(ctx context.Context, message string, fields map[string]interface{})
 	Fatal(ctx context.Context, message string, fields map[string]interface{})
+	FatalSignal() <-chan struct{}
 }
 
 // --- Metrics ---

@@ -14,23 +14,24 @@ import (
 
 	"github.com/caaspay/caaspay-core/internal/framework"
 	"github.com/caaspay/caaspay-core/pkg/api"
+	"github.com/caaspay/caaspay-core/pkg/structs"
 )
 
-type PingRequest struct {
-	Message string `json:"message"`
-}
-
-func (p *PingRequest) Validate() error {
-	if p.Message == "" {
-		return fmt.Errorf("message is required")
-	}
-	return nil
-}
-
-type PingResponse struct {
-	Response string                 `json:"response"`
-	Input    map[string]interface{} `json:"input"`
-}
+//type PingRequest struct {
+//	Message string `json:"message"`
+//}
+//
+//func (p *PingRequest) Validate() error {
+//	if p.Message == "" {
+//		return fmt.Errorf("message is required")
+//	}
+//	return nil
+//}
+//
+//type PingResponse struct {
+//	Response string                 `json:"response"`
+//	Input    map[string]interface{} `json:"input"`
+//}
 
 type HeartbeatMessage struct {
 	Node   string `json:"node"`
@@ -94,8 +95,8 @@ func (s *pingService) HealthCheck(ctx context.Context) error {
 	//s.ctx.Supervisor().GoLoop("call_rpc_healthcheck", func(ctx context.Context) (time.Duration, error) {
 	n := atomic.AddInt32(&s.pingReq, 1)
 	stream := s.ctx.BuildRPCStreamName("Ping")
-	req := PingRequest{Message: strconv.Itoa(int(c)) + " CALLER " + strconv.Itoa(int(n))}
-	var resp PingResponse
+	req := structs.PingRequest{Message: strconv.Itoa(int(c)) + " CALLER " + strconv.Itoa(int(n))}
+	var resp structs.PingResponse
 	if err := s.ctx.RequestRPC(stream, req, &resp, 50*time.Second); err != nil {
 		//	return 2 * time.Second, fmt.Errorf("rpc ping request failed: %w", err)
 	}
@@ -133,12 +134,12 @@ func (s *pingService) HealthCheck(ctx context.Context) error {
 
 	var httpresp MyResponse
 
-	err := s.ctx.RequestHTTP(ctx, "POST", "https://api.caaspay.com/webhook", httpreq, map[string]string{
+	err := s.ctx.RequestHTTP(ctx, "GET", "https://api.caaspay.com/status", httpreq, map[string]string{
 		"Authorization": "Bearer my-token",
 	}, &httpresp)
 
 	if err != nil {
-		s.ctx.Logger().Error(ctx, "❌ RequestHTTP failed", map[string]interface{}{"error": err.Error()})
+		s.ctx.Logger().Fatal(ctx, "❌ RequestHTTP failed", map[string]interface{}{"error": err.Error()})
 	} else {
 		s.ctx.Logger().Info(ctx, "✅ RequestHTTP OK", map[string]interface{}{"response": httpresp})
 	}
@@ -153,12 +154,12 @@ func (s *pingService) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (s *pingService) RPC_Ping(ctx context.Context, input PingRequest) (PingResponse, error) {
+func (s *pingService) RPC_Ping(ctx context.Context, input structs.PingRequest) (structs.PingResponse, error) {
 	s.pingLock.Lock()
 	defer s.pingLock.Unlock()
 	n := atomic.AddInt32(&s.pingCount, 1)
 	s.ctx.Logger().Info(ctx, fmt.Sprintf("📡 RPC_Ping invoked %d", n), nil)
-	return PingResponse{
+	return structs.PingResponse{
 		Response: fmt.Sprintf("pong %d", n),
 		Input:    map[string]interface{}{"message": input.Message},
 	}, nil

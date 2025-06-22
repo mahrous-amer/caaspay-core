@@ -58,9 +58,11 @@ func Bootstrap(create func(api.FrameworkContextInterface) api.ServiceInterface) 
 			return nil
 		case err := <-fwCtx.Supervisor().ErrorChannel():
 			fwCtx.Logger().Error(ctx, "💥 Shutting down due error in a supervised method", map[string]interface{}{"error": err.Error()})
+		case <-fwCtx.Logger().FatalSignal():
+			fwCtx.Logger().Error(ctx, "🔻 Logger fatal triggered shutdown", nil)
 		}
 
-		fwCtx.Logger().Info(ctx, "🛑 Initiating graceful shutdown...", nil)
+		fwCtx.Logger().Info(ctx, "💀 Initiating graceful shutdown...", nil)
 		svcStruct.Shutdown()
 
 		return nil

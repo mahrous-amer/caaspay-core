@@ -102,6 +102,21 @@ func (m *TransportMessage) ToJson() ([]byte, error) {
 	return json.Marshal(m)
 }
 
+// ToMap converts the TransportMessage to a map for broker use.
+func (m *TransportMessage) ToMap() (map[string]interface{}, error) {
+	var msgMap map[string]interface{}
+	// A reliable way to convert a struct to a map is to marshal and unmarshal it.
+	data, err := json.Marshal(m)
+	if err!= nil {
+		return nil, fmt.Errorf("failed to marshal message to map: %w", err)
+	}
+	err = json.Unmarshal(data, &msgMap)
+	if err!= nil {
+		return nil, fmt.Errorf("failed to unmarshal message to map: %w", err)
+	}
+	return msgMap, nil
+}
+
 // UnmarshalTransportMessage decodes the message from JSON.
 func DecodeTransportMessage(data []byte, transportID string) (*TransportMessage, error) {
 	var msg TransportMessage
