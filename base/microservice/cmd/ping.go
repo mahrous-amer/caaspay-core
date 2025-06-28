@@ -14,6 +14,7 @@ import (
 
 	"github.com/caaspay/caaspay-core/internal/framework"
 	"github.com/caaspay/caaspay-core/pkg/api"
+	"github.com/caaspay/caaspay-core/pkg/common/transport"
 	"github.com/caaspay/caaspay-core/pkg/structs"
 )
 
@@ -62,16 +63,16 @@ type pingService struct {
 	pingReq     int32
 	callerCount int32
 	uptimeStart time.Time
-	emitChan    chan *api.TransportMessage
+	emitChan    chan *transport.TransportMessage
 	pingLock    sync.Mutex
-	pushlogChan chan *api.TransportMessage
+	pushlogChan chan *transport.TransportMessage
 }
 
 func newPingService(ctx api.FrameworkContextInterface) api.ServiceInterface {
 	s := &pingService{
 		ctx:         ctx,
 		uptimeStart: time.Now(),
-		emitChan:    make(chan *api.TransportMessage, 1),
+		emitChan:    make(chan *transport.TransportMessage, 1),
 	}
 
 	return s
@@ -115,7 +116,7 @@ func (s *pingService) HealthCheck(ctx context.Context) error {
 	log := map[string]any{"note": "triggered", "ts": "TTTTTTTT " + strconv.Itoa(int(n))}
 	payload, _ := json.Marshal(log)
 
-	msg2 := api.NewTransportMessage(s.ctx.ServiceName(), "pushlog", payload)
+	msg2 := transport.NewTransportMessage(s.ctx.ServiceName(), "pushlog", payload)
 	msg2.Trace["source"] = "manual_trigger"
 	//select {
 	//case s.pushlogChan <- msg2:
@@ -165,7 +166,7 @@ func (s *pingService) RPC_Ping(ctx context.Context, input structs.PingRequest) (
 	}, nil
 }
 
-func (s *pingService) EmitterPull_Heartbeat(ctx context.Context) ([]*api.TransportMessage, time.Duration, error) {
+func (s *pingService) EmitterPull_Heartbeat(ctx context.Context) ([]*transport.TransportMessage, time.Duration, error) {
 	//select {
 	//case <-ctx.Done():
 	//	return nil, 0, ctx.Err()
@@ -178,13 +179,13 @@ func (s *pingService) EmitterPull_Heartbeat(ctx context.Context) ([]*api.Transpo
 		Status: "alive",
 	}
 	data, _ := json.Marshal(heartbeat)
-	msg := api.NewTransportMessage(s.ctx.ServiceName(), "ping.heartbeat", data)
+	msg := transport.NewTransportMessage(s.ctx.ServiceName(), "ping.heartbeat", data)
 	msg.Trace["source"] = "emitter_pull"
 
 	//log := map[string]any{"note": "triggered", "ts": "TTTTTTTT",}
 	//payload, _ := json.Marshal(log)
 
-	//msg2 := api.NewTransportMessage(s.ctx.ServiceName(), "pushlog", payload)
+	//msg2 := transport.NewTransportMessage(s.ctx.ServiceName(), "pushlog", payload)
 	//msg2.Trace["source"] = "manual_trigger"
 	//select {
 	//case s.pushlogChan <- msg2:
@@ -193,14 +194,14 @@ func (s *pingService) EmitterPull_Heartbeat(ctx context.Context) ([]*api.Transpo
 	//	return nil, 0, ctx.Err()
 	//}
 	//s.pushlogChan <- msg2
-	return []*api.TransportMessage{msg, msg, msg, msg, msg, msg}, 10 * time.Millisecond, nil
+	return []*transport.TransportMessage{msg, msg, msg, msg, msg, msg}, 10 * time.Millisecond, nil
 }
 
-func (s *pingService) EmitterChannel_PushLog(ctx context.Context, ch chan *api.TransportMessage) {
+func (s *pingService) EmitterChannel_PushLog(ctx context.Context, ch chan *transport.TransportMessage) {
 	s.pushlogChan = ch
 }
 
-//func (s *pingService) EmitterChannel_PushLog(ctx context.Context, ch chan *api.TransportMessage) {
+//func (s *pingService) EmitterChannel_PushLog(ctx context.Context, ch chan *transport.TransportMessage) {
 //	ticker := time.NewTicker(1 * time.Millisecond)
 //	defer ticker.Stop()
 //
@@ -215,7 +216,7 @@ func (s *pingService) EmitterChannel_PushLog(ctx context.Context, ch chan *api.T
 //				"uptime": time.Since(s.uptimeStart).String(),
 //			}
 //			data, _ := json.Marshal(log)
-//			msg := api.NewTransportMessage(s.ctx.ServiceName(), "ping.push_log", data)
+//			msg := transport.NewTransportMessage(s.ctx.ServiceName(), "ping.push_log", data)
 //			msg.Trace["source"] = "emitter_channel"
 //			ch <- msg
 //		}

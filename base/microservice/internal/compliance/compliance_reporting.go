@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/caaspay/caaspay-core/internal/config"
-	"github.com/caaspay/caaspay-core/internal/logging"
-	"github.com/caaspay/caaspay-core/internal/metrics"
-	"github.com/caaspay/caaspay-core/internal/tracing"
+	"github.com/caaspay/caaspay-core/pkg/api"
+	"github.com/caaspay/caaspay-core/pkg/common/logger"
+	"github.com/caaspay/caaspay-core/pkg/common/metrics"
+	"github.com/caaspay/caaspay-core/pkg/common/tracing"
 )
 
 // ComplianceReporter handles compliance event tracking and metrics.
 type ComplianceReporter struct {
 	ctx         context.Context
-	log         *logging.Logger
+	log         *logger.Logger
 	metrics     *metrics.Metrics
 	tracer      *tracing.TracerManager
 	enabled     bool
@@ -23,7 +23,7 @@ type ComplianceReporter struct {
 }
 
 // NewComplianceReporter initializes compliance tracking using config settings.
-func NewComplianceReporter(ctx context.Context, cfg *config.Config, log *logging.Logger, metrics *metrics.Metrics, tracer *tracing.TracerManager) *ComplianceReporter {
+func NewComplianceReporter(ctx context.Context, cfg *api.Config, log *logger.Logger, metrics *metrics.Metrics, tracer *tracing.TracerManager) *ComplianceReporter {
 	return &ComplianceReporter{
 		ctx:         ctx,
 		log:         log,
@@ -57,12 +57,12 @@ func (cr *ComplianceReporter) TrackEvent(eventName string) {
 
 // ComplianceChecker verifies that PCI and license compliance rules are met.
 type ComplianceChecker struct {
-	cfg      *config.Config
+	cfg      *api.Config
 	reporter *ComplianceReporter
 }
 
 // NewComplianceChecker creates a new checker.
-func NewComplianceChecker(cfg *config.Config, reporter *ComplianceReporter) *ComplianceChecker {
+func NewComplianceChecker(cfg *api.Config, reporter *ComplianceReporter) *ComplianceChecker {
 	return &ComplianceChecker{
 		cfg:      cfg,
 		reporter: reporter,

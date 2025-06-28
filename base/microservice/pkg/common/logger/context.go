@@ -1,4 +1,4 @@
-package logging
+package logger
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/caaspay/caaspay-core/pkg/api"
+	"github.com/caaspay/caaspay-core/pkg/common/fwctx"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -26,16 +26,16 @@ func (h *contextAwareHandler) Handle(ctx context.Context, r slog.Record) error {
 		slog.String("timestamp", time.Now().Format(time.RFC3339)),
 	)
 
-	for _, key := range []api.ContextKey{
-		api.CtxKeyMessageID,
-		api.CtxKeyStream,
-		api.CtxKeyRStream,
-		api.CtxKeyTraceID,
-		api.CtxKeySpanID,
-		api.CtxKeyUserID,
-		api.CtxKeyIP,
-		api.CtxKeyLocale,
-		api.CtxKeySource,
+	for _, key := range []fwctx.ContextKey{
+		fwctx.CtxKeyMessageID,
+		fwctx.CtxKeyStream,
+		fwctx.CtxKeyRStream,
+		fwctx.CtxKeyTraceID,
+		fwctx.CtxKeySpanID,
+		fwctx.CtxKeyUserID,
+		fwctx.CtxKeyIP,
+		fwctx.CtxKeyLocale,
+		fwctx.CtxKeySource,
 	} {
 		if val := ctx.Value(key); val != nil {
 			r.AddAttrs(slog.String(string(key), fmt.Sprintf("%v", val)))

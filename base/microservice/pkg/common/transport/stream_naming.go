@@ -1,13 +1,9 @@
-package api
+package transport
 
 import (
-	"context"
 	"fmt"
 	"strings"
 )
-
-// HandlerFunc defines a callback for processing incoming messages.
-type HandlerFunc func(ctx context.Context, request *TransportMessage) (*TransportMessage, error)
 
 // StreamType represents the kind of stream: RPC, emitter, receiver.
 type StreamType string
@@ -63,20 +59,45 @@ func (s *StreamConfig) Validate() error {
 	return nil
 }
 
-// ContextKey defines typed context keys used throughout the framework
-type ContextKey string
+// BuildStreamName generates a canonical stream name:
+// Format: <type>:<service>:<method>[:<instanceID>]
+func BuildStreamName(cfg StreamConfig) string {
+	cfg.Normalize()
+	base := fmt.Sprintf("%s:%s", cfg.Service, cfg.Method)
+	if cfg.InstanceID != "" {
+		return fmt.Sprintf("%s:%s:%s", cfg.Type, base, cfg.InstanceID)
+	}
+	return fmt.Sprintf("%s:%s", cfg.Type, base)
+}
 
-const (
-	// Logging and Tracing
-	CtxKeyMessageID ContextKey = "msg_transport_id"
-	CtxKeyStream    ContextKey = "stream"
-	CtxKeyRStream   ContextKey = "reply_stream"
-	CtxKeyTraceID   ContextKey = "trace_id"
-	CtxKeySpanID    ContextKey = "span_id"
+// ParseStreamName converts a stream name string into a StreamConfig.
+// Expected format: <type>:<service>:<method>[:<instanceID>]
+func ParseStreamName(stream string) (*StreamConfig, error) {
+	parts := strings.Split(stream, ":")
 
-	// Auth / Requester Metadata
-	CtxKeyUserID ContextKey = "user_id"
-	CtxKeyLocale ContextKey = "locale"
-	CtxKeyIP     ContextKey = "ip"
-	CtxKeySource ContextKey = "source"
-)
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("invalid stream name format: %s", stream)
+	}
+
+	cfg := &StreamConfig{
+		Type:    StreamType(parts[0]),
+		Service: parts[1],
+		Method:  parts[2],
+	}
+
+	if len(parts) > 3 {
+		cfg.InstanceID = parts[3]
+	}
+
+	cfg.Normalize()
+	return cfg, nil
+}
+
+// Example usage:
+// BuildStreamName(StreamConfig{
+//   Type: StreamTypeRPC,
+//   Service: "fxrate",
+//   Method: "GetRates",
+//   InstanceID: "instance-01",
+// })
+// Output: "rpc:fxrate:GetRates:instance-01"

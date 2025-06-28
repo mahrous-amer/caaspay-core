@@ -11,31 +11,31 @@ import (
 	"github.com/caaspay/caaspay-core/internal/compliance"
 	"github.com/caaspay/caaspay-core/internal/config"
 	"github.com/caaspay/caaspay-core/internal/httpclient"
-	"github.com/caaspay/caaspay-core/internal/logging"
-	"github.com/caaspay/caaspay-core/internal/metrics"
-	"github.com/caaspay/caaspay-core/internal/storage"
-	"github.com/caaspay/caaspay-core/internal/supervisor"
-	"github.com/caaspay/caaspay-core/internal/tracing"
-	"github.com/caaspay/caaspay-core/internal/transport"
-	"github.com/caaspay/caaspay-core/internal/validation"
 	"github.com/caaspay/caaspay-core/pkg/api"
+	"github.com/caaspay/caaspay-core/pkg/common/logger"
+	"github.com/caaspay/caaspay-core/pkg/common/metrics"
+	"github.com/caaspay/caaspay-core/pkg/common/storage"
+	"github.com/caaspay/caaspay-core/pkg/common/supervisor"
+	"github.com/caaspay/caaspay-core/pkg/common/tracing"
+	"github.com/caaspay/caaspay-core/pkg/common/transport"
+	"github.com/caaspay/caaspay-core/pkg/common/validation"
 )
 
 // FrameworkContext encapsulates all framework components.
 type FrameworkContext struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
-	logger        api.LoggerInterface
-	metrics       api.MetricsInterface
-	transport     api.TransportInterface
-	storage       api.StorageInterface
+	logger        logger.LoggerInterface
+	metrics       metrics.MetricsInterface
+	transport     transport.TransportInterface
+	storage       storage.StorageInterface
 	compliance    api.ComplianceInterface
-	config        *config.Config
-	serviceConfig *config.ServiceConfig
+	config        *api.Config
+	serviceConfig *api.ServiceConfig
 	serviceName   string
-	validator     api.ValidatorInterface
+	validator     validation.ValidatorInterface
 	service       api.ServiceInterface
-	supervisor    api.SupervisorInterface
+	supervisor    supervisor.SupervisorInterface
 	httpClient    api.HTTPClientInterface
 }
 
@@ -48,7 +48,7 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 
 	ctx, cancel := context.WithCancel(rootCtx)
 
-	logger := logging.NewLogger(cfg.Framework.ServiceName, cfg.Framework.Logging.Level, cfg.Framework.Logging.RedactSensitive)
+	logger := logger.NewLogger(cfg.Framework.ServiceName, cfg.Framework.Logging.Level, cfg.Framework.Logging.RedactSensitive)
 
 	metricsInstance, err := metrics.NewMetrics(ctx, cfg.Framework.ServiceName, &cfg.Framework.Observability, logger)
 	if err != nil {
@@ -101,7 +101,7 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 	complianceReporter := compliance.NewComplianceReporter(ctx, cfg, logger, metricsInstance, tracerManager)
 	validator := validation.NewValidator()
 
-	serviceConfig := &config.ServiceConfig{}
+	serviceConfig := &api.ServiceConfig{}
 	svcName := cfg.Framework.ServiceName
 	if serviceData, ok := cfg.Service[svcName]; ok {
 		if err := config.MapToStruct(serviceData, serviceConfig); err != nil {
@@ -151,24 +151,24 @@ func NewFrameworkContext(rootCtx context.Context) (*FrameworkContext, error) {
 	return fwCtx, nil
 }
 
-func (f *FrameworkContext) Logger() api.LoggerInterface          { return f.logger }
-func (f *FrameworkContext) Metrics() api.MetricsInterface        { return f.metrics }
-func (f *FrameworkContext) Transport() api.TransportInterface    { return f.transport }
-func (f *FrameworkContext) Storage() api.StorageInterface        { return f.storage }
-func (f *FrameworkContext) Compliance() api.ComplianceInterface  { return f.compliance }
-func (f *FrameworkContext) Config() *config.Config               { return f.config }
-func (f *FrameworkContext) ServiceConfig() *config.ServiceConfig { return f.serviceConfig }
-func (f *FrameworkContext) ServiceName() string                  { return f.serviceName }
-func (f *FrameworkContext) Validator() api.ValidatorInterface    { return f.validator }
-func (f *FrameworkContext) Supervisor() api.SupervisorInterface  { return f.supervisor }
-func (f *FrameworkContext) Context() context.Context             { return f.ctx }
-func (f *FrameworkContext) SetService(s api.ServiceInterface)    { f.service = s }
-func (f *FrameworkContext) Service() api.ServiceInterface        { return f.service }
+func (f *FrameworkContext) Logger() logger.LoggerInterface             { return f.logger }
+func (f *FrameworkContext) Metrics() metrics.MetricsInterface          { return f.metrics }
+func (f *FrameworkContext) Transport() transport.TransportInterface    { return f.transport }
+func (f *FrameworkContext) Storage() storage.StorageInterface          { return f.storage }
+func (f *FrameworkContext) Compliance() api.ComplianceInterface        { return f.compliance }
+func (f *FrameworkContext) Config() *api.Config                        { return f.config }
+func (f *FrameworkContext) ServiceConfig() *api.ServiceConfig          { return f.serviceConfig }
+func (f *FrameworkContext) ServiceName() string                        { return f.serviceName }
+func (f *FrameworkContext) Validator() validation.ValidatorInterface   { return f.validator }
+func (f *FrameworkContext) Supervisor() supervisor.SupervisorInterface { return f.supervisor }
+func (f *FrameworkContext) Context() context.Context                   { return f.ctx }
+func (f *FrameworkContext) SetService(s api.ServiceInterface)          { f.service = s }
+func (f *FrameworkContext) Service() api.ServiceInterface              { return f.service }
 
 //func (f *FrameworkContext) Shutdown(ctx context.Context)         { f.service.Shutdown(ctx) }
 
-func (f *FrameworkContext) BuildStreamName(kind api.StreamType, service, method string) string {
-	return transport.BuildStreamName(api.StreamConfig{
+func (f *FrameworkContext) BuildStreamName(kind transport.StreamType, service, method string) string {
+	return transport.BuildStreamName(transport.StreamConfig{
 		Type:    kind,
 		Service: service,
 		Method:  method,
@@ -182,7 +182,7 @@ func (f *FrameworkContext) BuildRPCStreamName(method string, serviceName ...stri
 	if len(serviceName) > 0 && serviceName[0] != "" {
 		service = serviceName[0]
 	}
-	return f.BuildStreamName(api.StreamTypeRPC, service, method)
+	return f.BuildStreamName(transport.StreamTypeRPC, service, method)
 }
 
 func (f *FrameworkContext) IsHealthy() bool {
@@ -237,7 +237,7 @@ func (f *FrameworkContext) RequestRPC(stream string, input any, output any, time
 	timing.encode = time.Since(estart)
 
 	// 3. Prepare and send request
-	msg := api.NewTransportMessage(f.ServiceName(), stream, rawArgs, timeout)
+	msg := transport.NewTransportMessage(f.ServiceName(), stream, rawArgs, timeout)
 	tstart := time.Now()
 
 	_, _, line, ok := runtime.Caller(1) // 1 = skip current function

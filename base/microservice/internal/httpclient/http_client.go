@@ -10,14 +10,14 @@ import (
 	"time"
 
 	"github.com/caaspay/caaspay-core/internal/compliance"
-	"github.com/caaspay/caaspay-core/internal/logging"
-	"github.com/caaspay/caaspay-core/internal/metrics"
-	"github.com/caaspay/caaspay-core/internal/supervisor"
+	"github.com/caaspay/caaspay-core/pkg/common/logger"
+	"github.com/caaspay/caaspay-core/pkg/common/metrics"
+	"github.com/caaspay/caaspay-core/pkg/common/supervisor"
 )
 
 type Client struct {
 	client     *http.Client
-	log        *logging.Logger
+	log        *logger.Logger
 	metrics    *metrics.Metrics
 	supervisor *supervisor.Supervisor
 	compliance *compliance.ComplianceReporter
@@ -27,7 +27,7 @@ type Client struct {
 type Config struct {
 	Timeout    time.Duration
 	UserAgent  string
-	Logger     *logging.Logger
+	Logger     *logger.Logger
 	Metrics    *metrics.Metrics
 	Supervisor *supervisor.Supervisor
 	Compliance *compliance.ComplianceReporter

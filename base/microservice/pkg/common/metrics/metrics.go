@@ -6,8 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caaspay/caaspay-core/internal/config"
-	"github.com/caaspay/caaspay-core/pkg/api"
+	"github.com/caaspay/caaspay-core/pkg/common/logger"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
@@ -18,9 +17,9 @@ import (
 
 type Metrics struct {
 	ctx         context.Context
-	logger      api.LoggerInterface
+	logger      logger.LoggerInterface
 	serviceName string
-	cfg         *config.ObservabilityConfig
+	cfg         *ObservabilityConfig
 	meter       metric.Meter
 	enabled     bool
 
@@ -31,7 +30,7 @@ type Metrics struct {
 	registryMutex sync.Mutex
 }
 
-func NewMetrics(ctx context.Context, serviceName string, cfg *config.ObservabilityConfig, logger api.LoggerInterface) (*Metrics, error) {
+func NewMetrics(ctx context.Context, serviceName string, cfg *ObservabilityConfig, logger logger.LoggerInterface) (*Metrics, error) {
 	m := &Metrics{
 		ctx:           ctx,
 		logger:        logger,

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/caaspay/caaspay-core/internal/config"
-	"github.com/caaspay/caaspay-core/internal/logging"
+	"github.com/caaspay/caaspay-core/pkg/common/logger"
+	"github.com/caaspay/caaspay-core/pkg/common/metrics"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/jaeger"
@@ -24,11 +24,11 @@ type TracerManager struct {
 	ctx      context.Context
 	tracer   trace.Tracer
 	shutdown func()
-	logger   *logging.Logger
+	logger   *logger.Logger
 }
 
 // NewTracerManager initializes OpenTelemetry tracing with proper logging and shutdown.
-func NewTracerManager(ctx context.Context, serviceName string, cfg *config.ObservabilityConfig, logger *logging.Logger) (*TracerManager, error) {
+func NewTracerManager(ctx context.Context, serviceName string, cfg *metrics.ObservabilityConfig, logger *logger.Logger) (*TracerManager, error) {
 	if !cfg.TracingEnabled {
 		logger.Warn(ctx, "⚠️ Tracing is disabled in configuration", nil)
 		return &TracerManager{
@@ -111,7 +111,7 @@ func (tm *TracerManager) Shutdown() {
 }
 
 // setupJaeger configures Jaeger exporter and tracer provider.
-func setupJaeger(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace.TracerProvider, string, error) {
+func setupJaeger(serviceName string, cfg *metrics.ObservabilityConfig) (*sdktrace.TracerProvider, string, error) {
 	endpoint := fmt.Sprintf("http://%s:%d/api/traces", cfg.OpentracingHost, cfg.OpentracingPort)
 
 	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(endpoint)))
@@ -131,7 +131,7 @@ func setupJaeger(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace
 }
 
 // setupDatadog configures Datadog tracer and returns a tracer provider.
-func setupDatadog(serviceName string, cfg *config.ObservabilityConfig) (*sdktrace.TracerProvider, error) {
+func setupDatadog(serviceName string, cfg *metrics.ObservabilityConfig) (*sdktrace.TracerProvider, error) {
 	ddtracer.Start(
 		ddtracer.WithService(serviceName),
 		ddtracer.WithEnv(cfg.Env),

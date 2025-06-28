@@ -1,4 +1,4 @@
-package api
+package transport
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/caaspay/caaspay-core/pkg/common/fwctx"
 	"github.com/google/uuid"
 )
 
@@ -107,11 +108,11 @@ func (m *TransportMessage) ToMap() (map[string]interface{}, error) {
 	var msgMap map[string]interface{}
 	// A reliable way to convert a struct to a map is to marshal and unmarshal it.
 	data, err := json.Marshal(m)
-	if err!= nil {
+	if err != nil {
 		return nil, fmt.Errorf("failed to marshal message to map: %w", err)
 	}
 	err = json.Unmarshal(data, &msgMap)
-	if err!= nil {
+	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal message to map: %w", err)
 	}
 	return msgMap, nil
@@ -151,34 +152,34 @@ func (m *TransportMessage) ValidateAgainst(schema any) error {
 }
 
 func (m *TransportMessage) AttachToContext(ctx context.Context) context.Context {
-	ctx = context.WithValue(ctx, CtxKeyMessageID, m.TransportID)
-	ctx = context.WithValue(ctx, CtxKeyStream, m.Method)
-	ctx = context.WithValue(ctx, CtxKeyRStream, m.ReplyTo)
+	ctx = context.WithValue(ctx, fwctx.CtxKeyMessageID, m.TransportID)
+	ctx = context.WithValue(ctx, fwctx.CtxKeyStream, m.Method)
+	ctx = context.WithValue(ctx, fwctx.CtxKeyRStream, m.ReplyTo)
 
 	// Auth metadata
 	if m.Auth != nil && m.Auth.UserID != "" {
-		ctx = context.WithValue(ctx, CtxKeyUserID, m.Auth.UserID)
+		ctx = context.WithValue(ctx, fwctx.CtxKeyUserID, m.Auth.UserID)
 	}
 
 	// Request metadata
 	if m.Context != nil {
 		if m.Context.IP != "" {
-			ctx = context.WithValue(ctx, CtxKeyIP, m.Context.IP)
+			ctx = context.WithValue(ctx, fwctx.CtxKeyIP, m.Context.IP)
 		}
 		if m.Context.Locale != "" {
-			ctx = context.WithValue(ctx, CtxKeyLocale, m.Context.Locale)
+			ctx = context.WithValue(ctx, fwctx.CtxKeyLocale, m.Context.Locale)
 		}
 		if m.Context.Source != "" {
-			ctx = context.WithValue(ctx, CtxKeySource, m.Context.Source)
+			ctx = context.WithValue(ctx, fwctx.CtxKeySource, m.Context.Source)
 		}
 	}
 
 	// Optional: add trace/span ID if you extract from m.Trace map
 	if traceID, ok := m.Trace["trace_id"]; ok {
-		ctx = context.WithValue(ctx, CtxKeyTraceID, traceID)
+		ctx = context.WithValue(ctx, fwctx.CtxKeyTraceID, traceID)
 	}
 	if spanID, ok := m.Trace["span_id"]; ok {
-		ctx = context.WithValue(ctx, CtxKeySpanID, spanID)
+		ctx = context.WithValue(ctx, fwctx.CtxKeySpanID, spanID)
 	}
 
 	return ctx

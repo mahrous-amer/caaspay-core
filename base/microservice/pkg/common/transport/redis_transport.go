@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caaspay/caaspay-core/internal/logging"
-	"github.com/caaspay/caaspay-core/internal/metrics"
-	"github.com/caaspay/caaspay-core/pkg/api"
+	"github.com/caaspay/caaspay-core/pkg/common/logger"
+	"github.com/caaspay/caaspay-core/pkg/common/metrics"
+	"github.com/caaspay/caaspay-core/pkg/common/supervisor"
 	//	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -38,9 +38,9 @@ type RedisTransport struct {
 
 	ctx             context.Context
 	cancelFunc      context.CancelFunc
-	logger          *logging.Logger
+	logger          *logger.Logger
 	metrics         *metrics.Metrics
-	supervisor      api.SupervisorInterface
+	supervisor      supervisor.SupervisorInterface
 	replyRouter     sync.Map // key: messageID, value: chan []byte
 	streamsCreated  sync.Map // key: stream name (string), value: StreamMeta
 	pendingCleanups sync.Map // key: stream+group string, value: bool
@@ -103,7 +103,7 @@ type ConsumerDetail struct {
 	IdleMS  time.Duration `json:"idle_ms"`
 }
 
-func NewRedisTransport(RootCtx context.Context, logger *logging.Logger, metrics *metrics.Metrics, sup api.SupervisorInterface, cfg RedisTransportConfig) (*RedisTransport, error) {
+func NewRedisTransport(RootCtx context.Context, logger *logger.Logger, metrics *metrics.Metrics, sup supervisor.SupervisorInterface, cfg RedisTransportConfig) (*RedisTransport, error) {
 	var client redis.Cmdable
 
 	ctx, cancel := context.WithCancel(RootCtx)
@@ -681,7 +681,7 @@ func (r *RedisTransport) CleanupOnStartup() {
 	})
 }
 
-func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consumerName string, checkDeadline bool) ([]*api.TransportMessage, error) {
+func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consumerName string, checkDeadline bool) ([]*TransportMessage, error) {
 	r.updateStreamSubscriptionStatus(stream, true)
 	//defer r.updateStreamSubscriptionStatus(stream, false)
 	res, err := r.client.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -699,7 +699,7 @@ func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consu
 		return nil, err
 	}
 
-	var messages []*api.TransportMessage
+	var messages []*TransportMessage
 	for _, s := range res {
 		for _, msg := range s.Messages {
 			bodyRaw, ok := msg.Values["body"]
@@ -733,7 +733,7 @@ func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consu
 				continue
 			}
 
-			decoded, err := api.DecodeTransportMessage(processed, msg.ID)
+			decoded, err := DecodeTransportMessage(processed, msg.ID)
 			if err != nil {
 				r.logger.Error(ctx, "❌ Failed to decode TransportMessage", map[string]interface{}{
 					"stream": stream,
@@ -753,7 +753,7 @@ func (r *RedisTransport) readGroup(ctx context.Context, stream, groupName, consu
 }
 
 // Request sends an RPC request and waits for a response.
-func (r *RedisTransport) Request(ctx context.Context, stream string, msg *api.TransportMessage, timeout time.Duration, caller string) (*api.TransportMessage, error) {
+func (r *RedisTransport) Request(ctx context.Context, stream string, msg *TransportMessage, timeout time.Duration, caller string) (*TransportMessage, error) {
 	// ensure requested method and service exists
 	exists, err := r.client.Exists(ctx, stream).Result()
 	if err != nil {
@@ -775,7 +775,7 @@ func (r *RedisTransport) Request(ctx context.Context, stream string, msg *api.Tr
 	ctx = msg.AttachToContext(ctx)
 
 	// Prepare response channel
-	responseCh := make(chan *api.TransportMessage, 1)
+	responseCh := make(chan *TransportMessage, 1)
 	r.replyRouter.Store(msg.MessageID, responseCh)
 
 	// Start listener goroutine
@@ -887,7 +887,7 @@ func (r *RedisTransport) listenForReply(ctx context.Context, replyStream string,
 
 			// ✅ Send reply to waiting channel
 			if ch, ok := r.replyRouter.LoadAndDelete(decoded.MessageID); ok {
-				if typedCh, ok := ch.(chan *api.TransportMessage); ok {
+				if typedCh, ok := ch.(chan *TransportMessage); ok {
 					typedCh <- decoded
 					// ✅ Acknowledge the message
 					if err := r.client.XAck(ctx, replyStream, groupName, decoded.TransportID).Err(); err != nil {
@@ -951,7 +951,7 @@ func (r *RedisTransport) cleanupExpiredPendingMessages(ctx context.Context, stre
 		if err != nil {
 			continue
 		}
-		decoded, err := api.DecodeTransportMessage(processed, msgs[0].ID)
+		decoded, err := DecodeTransportMessage(processed, msgs[0].ID)
 		if err != nil {
 			continue
 		}
@@ -1005,7 +1005,7 @@ func (r *RedisTransport) Publish(ctx context.Context, stream string, data []byte
 	return nil
 }
 
-func (r *RedisTransport) Emit(ctx context.Context, stream string, msg *api.TransportMessage) error {
+func (r *RedisTransport) Emit(ctx context.Context, stream string, msg *TransportMessage) error {
 	//start := time.Now()
 	ctx = msg.AttachToContext(ctx)
 	jsonMsg, err := msg.ToJson()
@@ -1030,7 +1030,7 @@ func (r *RedisTransport) Emit(ctx context.Context, stream string, msg *api.Trans
 	return r.Publish(ctx, stream, encodedMsg)
 }
 
-func (r *RedisTransport) Subscribe(ctx context.Context, consumerGroup string, stream string, handler api.HandlerFunc, checkDeadline bool) error {
+func (r *RedisTransport) Subscribe(ctx context.Context, consumerGroup string, stream string, handler HandlerFunc, checkDeadline bool) error {
 	group := "consumer_group"
 	if consumerGroup != "" {
 		group = consumerGroup

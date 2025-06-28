@@ -9,15 +9,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caaspay/caaspay-core/internal/transport"
 	"github.com/caaspay/caaspay-core/pkg/api"
+	"github.com/caaspay/caaspay-core/pkg/common/supervisor"
+	"github.com/caaspay/caaspay-core/pkg/common/transport"
 )
 
 // ServiceStruct represents the core service structure with FrameworkContext.
 type ServiceStruct struct {
 	frameworkCtx    api.FrameworkContextInterface
 	serviceInstance api.ServiceInterface
-	supervisor      api.SupervisorInterface
+	supervisor      supervisor.SupervisorInterface
 	healthServer    *HealthServer
 	lifecycle       *ServiceLifecycle
 }
@@ -121,8 +122,8 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 		// 🚀 RPC METHOD
 		// Example: func RPC_Ping(ctx context.Context, req PingRequest) (PingResponse, error)
 		case strings.HasPrefix(methodName, "RPC_"):
-			stream := transport.BuildStreamName(api.StreamConfig{
-				Type:    api.StreamTypeRPC,
+			stream := transport.BuildStreamName(transport.StreamConfig{
+				Type:    transport.StreamTypeRPC,
 				Service: s.frameworkCtx.ServiceName(),
 				Method:  trimPrefix(methodName, "RPC_"),
 			})
@@ -145,8 +146,8 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 		// 🔁 EmitterPull
 		// Example: func EmitterPull_Heartbeat(ctx context.Context) ([]*TransportMessage, time.Duration, error)
 		case strings.HasPrefix(methodName, "EmitterPull_"):
-			stream := transport.BuildStreamName(api.StreamConfig{
-				Type:    api.StreamTypeEmitter,
+			stream := transport.BuildStreamName(transport.StreamConfig{
+				Type:    transport.StreamTypeEmitter,
 				Service: s.frameworkCtx.ServiceName(),
 				Method:  trimPrefix(methodName, "EmitterPull_"),
 			})
@@ -169,8 +170,8 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 		// 📡 EmitterChannel
 		// Example: func EmitterChannel_PushLog(ctx context.Context, ch chan *TransportMessage)
 		case strings.HasPrefix(methodName, "EmitterChannel_"):
-			stream := transport.BuildStreamName(api.StreamConfig{
-				Type:    api.StreamTypeEmitter,
+			stream := transport.BuildStreamName(transport.StreamConfig{
+				Type:    transport.StreamTypeEmitter,
 				Service: s.frameworkCtx.ServiceName(),
 				Method:  trimPrefix(methodName, "EmitterChannel_"),
 			})
@@ -228,8 +229,8 @@ func (s *ServiceStruct) autoRegisterFunctions(serviceInstance interface{}) {
 
 			sourceService := strings.ToLower(parts[0])
 			sourceMethod := strings.ToLower(parts[1])
-			stream := transport.BuildStreamName(api.StreamConfig{
-				Type:    api.StreamTypeEmitter,
+			stream := transport.BuildStreamName(transport.StreamConfig{
+				Type:    transport.StreamTypeEmitter,
 				Service: sourceService,
 				Method:  sourceMethod,
 			})
@@ -283,7 +284,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 		return fmt.Errorf("Invalid RPC method return type %s", method.String())
 	}
 
-	handler := func(ctx context.Context, msg *api.TransportMessage) (*api.TransportMessage, error) {
+	handler := func(ctx context.Context, msg *transport.TransportMessage) (*transport.TransportMessage, error) {
 		metrics := s.frameworkCtx.Metrics()
 		logger := s.frameworkCtx.Logger()
 		compliance := s.frameworkCtx.Compliance()
@@ -347,7 +348,7 @@ func (s *ServiceStruct) registerRPCMethod(stream string, method reflect.Value, m
 
 		if msg.ReplyTo != "" {
 			start = time.Now()
-			reply := api.NewTransportMessage(s.frameworkCtx.ServiceName(), stream, nil)
+			reply := transport.NewTransportMessage(s.frameworkCtx.ServiceName(), stream, nil)
 			reply.MessageID = msg.MessageID
 			reply.Trace = msg.Trace
 			reply.Stash = msg.Stash
@@ -430,7 +431,7 @@ func (s *ServiceStruct) registerEmitterPull(stream string, method reflect.Value)
 			return 5 * time.Second, nil
 		}
 
-		messages := results[0].Interface().([]*api.TransportMessage)
+		messages := results[0].Interface().([]*transport.TransportMessage)
 		interval := results[1].Interface().(time.Duration)
 		var err error
 		if !results[2].IsNil() {
@@ -486,7 +487,7 @@ func (s *ServiceStruct) registerEmitterPull(stream string, method reflect.Value)
 }
 
 func (s *ServiceStruct) registerEmitterChannel(stream string, method reflect.Value) error {
-	ch := make(chan *api.TransportMessage, 100)
+	ch := make(chan *transport.TransportMessage, 100)
 	// 👇 Inject the channel once for service usage
 	method.Call([]reflect.Value{
 		reflect.ValueOf(s.frameworkCtx.Context()),
@@ -551,7 +552,7 @@ func (s *ServiceStruct) registerReceiver(stream string, argType reflect.Type, me
 		return fmt.Errorf("Receiver argument must be pointer to a struct")
 	}
 
-	handler := func(ctx context.Context, msg *api.TransportMessage) (*api.TransportMessage, error) {
+	handler := func(ctx context.Context, msg *transport.TransportMessage) (*transport.TransportMessage, error) {
 		//ctx := s.frameworkCtx.Context()
 
 		//var msg api.TransportMessage

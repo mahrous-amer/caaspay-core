@@ -4,20 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
-
-	"github.com/caaspay/caaspay-core/internal/config"
+	//	"sync"
 )
 
-// Store defines the interface for storage backends.
-type Store interface {
-	Get(key string) (interface{}, error)
-	Set(key string, value interface{}) error
-	Delete(key string) error
-}
-
 // NewStore initializes a storage backend based on the configuration.
-func NewStore(cfg config.StorageConfig) (Store, error) {
+func NewStore(cfg StorageConfig) (Store, error) {
 	switch cfg.Type {
 	case "inmemory":
 		return NewInMemoryStore(context.Background()), nil
@@ -30,13 +21,6 @@ func NewStore(cfg config.StorageConfig) (Store, error) {
 	default:
 		return nil, fmt.Errorf("unsupported storage type: %s", cfg.Type)
 	}
-}
-
-// InMemoryStore is a thread-safe in-memory implementation of the Store interface.
-type InMemoryStore struct {
-	ctx  context.Context
-	mu   sync.RWMutex
-	data map[string]interface{}
 }
 
 // NewInMemoryStore creates a new instance of InMemoryStore.

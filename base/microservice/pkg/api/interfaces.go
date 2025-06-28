@@ -2,10 +2,14 @@ package api
 
 import (
 	"context"
+	"github.com/caaspay/caaspay-core/pkg/common/logger"
+	"github.com/caaspay/caaspay-core/pkg/common/metrics"
+	"github.com/caaspay/caaspay-core/pkg/common/storage"
+	"github.com/caaspay/caaspay-core/pkg/common/supervisor"
+	"github.com/caaspay/caaspay-core/pkg/common/transport"
+	"github.com/caaspay/caaspay-core/pkg/common/validation"
 	"net/http"
 	"time"
-
-	"github.com/caaspay/caaspay-core/internal/config"
 )
 
 // --- Service Lifecycle Interface ---
@@ -13,34 +17,6 @@ type ServiceInterface interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	HealthCheck(ctx context.Context) error
-}
-
-// --- Logger ---
-type LoggerInterface interface {
-	Info(ctx context.Context, message string, fields map[string]interface{})
-	Error(ctx context.Context, message string, fields map[string]interface{})
-	Warn(ctx context.Context, message string, fields map[string]interface{})
-	Debug(ctx context.Context, message string, fields map[string]interface{})
-	Fatal(ctx context.Context, message string, fields map[string]interface{})
-	FatalSignal() <-chan struct{}
-}
-
-// --- Metrics ---
-type MetricsInterface interface {
-	Increment(metricName string, delta ...int64)
-	IncrementTagged(name string, tags ...string)
-	RecordLatency(duration time.Duration)
-	RecordTiming(operation string, duration time.Duration)
-	IncrementError()
-	TrackActiveRequests(delta int64)
-	ObserveHistogram(name string, value float64, tags ...string)
-	Shutdown()
-}
-
-// --- Storage abstraction ---
-type StorageInterface interface {
-	Get(key string) (interface{}, error)
-	Set(key string, value interface{}) error
 }
 
 // --- Compliance tracking abstraction ---
@@ -52,48 +28,23 @@ type ComplianceReporterInterface interface {
 	TrackEvent(event string)
 }
 
-// --- Validator abstraction ---
-type ValidatorInterface interface {
-	ValidateStruct(input interface{}) error
-}
-
-// SupervisorInterface defines how the framework manages goroutines.
-type SupervisorInterface interface {
-	// Go launches a managed goroutine that can report failure.
-	Go(name string, fn func(ctx context.Context) error)
-	GoLoop(name string, fn func(ctx context.Context) (time.Duration, error))
-
-	// WaitAndShutdown blocks until an error or shutdown occurs, and runs shutdown logic.
-	WaitAndShutdown(onShutdown func())
-
-	// Shutdown triggers graceful cancellation of all supervised goroutines.
-	Shutdown()
-
-	// Done returns a channel closed once all goroutines have exited.
-	Done() <-chan struct{}
-
-	// StopAll is optionally used for forced termination or post-processing logic.
-	StopAll()
-	ErrorChannel() <-chan error
-}
-
 // --- Framework Context (Container) ---
 type FrameworkContextInterface interface {
-	Logger() LoggerInterface
-	Metrics() MetricsInterface
-	Transport() TransportInterface
-	Storage() StorageInterface
+	Logger() logger.LoggerInterface
+	Metrics() metrics.MetricsInterface
+	Transport() transport.TransportInterface
+	Supervisor() supervisor.SupervisorInterface
+	Validator() validation.ValidatorInterface
+	Storage() storage.StorageInterface
 	Compliance() ComplianceInterface
-	Config() *config.Config
+	Config() *Config
 	Context() context.Context
-	ServiceConfig() *config.ServiceConfig
+	ServiceConfig() *ServiceConfig
 	ServiceName() string
-	Validator() ValidatorInterface
 	IsHealthy() bool
 	Service() ServiceInterface
 	SetService(s ServiceInterface)
-	Supervisor() SupervisorInterface
-	BuildStreamName(kind StreamType, service, method string) string
+	BuildStreamName(kind transport.StreamType, service, method string) string
 	BuildRPCStreamName(method string, serviceName ...string) string
 	RequestRPC(stream string, input any, output any, timeout time.Duration) error
 	//RequestHTTP(ctx context.Context, method, url string, body []byte, headers map[string]string) (*http.Response, error)
@@ -112,18 +63,6 @@ type FrameworkContextInterface interface {
 		body []byte,
 		headers map[string]string,
 	) (*http.Response, []byte, error)
-}
-
-// TransportInterface defines the messaging transport interface for pluggable broker backends.
-type TransportInterface interface {
-	Publish(ctx context.Context, stream string, data []byte) error
-	Request(ctx context.Context, stream string, msg *TransportMessage, timeout time.Duration, caller string) (*TransportMessage, error)
-	Subscribe(ctx context.Context, consumerGroup string, stream string, handler HandlerFunc, checkDeadline bool) error
-	Emit(ctx context.Context, stream string, msg *TransportMessage) error
-	Close() error
-	IsHealthy() bool
-	CleanupOnShutdown()
-	CleanupOnStartup()
 }
 
 type HTTPClientInterface interface {

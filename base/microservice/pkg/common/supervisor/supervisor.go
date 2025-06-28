@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caaspay/caaspay-core/internal/logging"
+	"github.com/caaspay/caaspay-core/pkg/common/logger"
 	"github.com/google/uuid"
 )
 
@@ -30,13 +30,13 @@ type Supervisor struct {
 	errChan chan error
 	ctx     context.Context
 	cancel  context.CancelFunc
-	logger  *logging.Logger
+	logger  *logger.Logger
 	doneCh  chan struct{}
 	once    sync.Once
 	active  sync.Map // map[string]goroutineInfo
 }
 
-func NewSupervisor(ctx context.Context, cancel context.CancelFunc, logger *logging.Logger) *Supervisor {
+func NewSupervisor(ctx context.Context, cancel context.CancelFunc, logger *logger.Logger) *Supervisor {
 	return &Supervisor{
 		errChan: make(chan error, 1),
 		ctx:     ctx,
